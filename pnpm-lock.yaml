@@ -57,6 +57,9 @@ importers:
       '@types/node':
         specifier: ^22.10.7
         version: 22.20.1
+      esbuild:
+        specifier: ^0.24.2
+        version: 0.24.2
       jsdom:
         specifier: ^25.0.1
         version: 25.0.1(supports-color@7.2.0)

@@ -12,6 +12,7 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Callable, List, Optional, Set
 
+from .errors import AutomationError
 from .types import LeaseMode, PreemptionRequest, RevokeReason
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -80,11 +81,38 @@ class ControlLeaseHandle:
     async def renew(self, ms: Optional[float] = None) -> None:
         if self._revoked:
             return
-        payload = {"targetId": self.target_id, "leaseId": self.lease_id}
+        # The gateway answers a renew with a fresh ``control.granted`` for
+        # this lease that carries no ``re`` (the lease engine emits it
+        # straight to the viewer). Waiting only for a reply correlated by
+        # ``re`` meant every renew timed out against a real gateway, the
+        # local ``expires_at`` never moved, and every verb failed with
+        # LEASE_NOT_HELD 30 seconds after ``acquire_control()``. So this
+        # accepts either shape. Mirrors ``leaseHandle.ts``'s ``renew()``.
+        cid = self._core.new_id()
+        payload = {"id": cid, "targetId": self.target_id, "leaseId": self.lease_id}
         if ms is not None:
             payload["ttlMs"] = ms
-        reply = await self._core.request("control.renew", payload)
-        self._expires_at = reply["expiresAt"]
+
+        def is_reply(m: dict) -> bool:
+            if m.get("re") == cid:
+                return True
+            return (
+                m.get("t") == "control.granted"
+                and m.get("targetId") == self.target_id
+                and m.get("leaseId") == self.lease_id
+            )
+
+        waiter = self._core.begin_wait(is_reply, self._core.default_timeout_ms)
+        try:
+            await self._core.send("control.renew", payload)
+        except BaseException:
+            waiter.close()
+            raise
+        reply = await waiter
+        if reply.get("t") == "error":
+            raise AutomationError.from_error_msg(reply)
+        if reply.get("t") == "control.granted":
+            self._expires_at = reply["expiresAt"]
 
     async def release(self) -> None:
         await self._release_now(None)

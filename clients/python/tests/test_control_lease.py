@@ -142,3 +142,41 @@ async def test_yield_control_is_voluntary_and_sets_no_backoff():
         assert "t1" not in client._core.requeue_blocked_until
     finally:
         await client.close()
+
+
+def _uncorrelated_renew_handler(ttl_ms: float = 90000):
+    """Answers ``control.renew`` the way the real gateway does: a fresh
+    ``control.granted`` for the lease with no ``re`` on it."""
+
+    def handler(msg):
+        return {
+            "t": "control.granted",
+            "re": None,
+            "targetId": msg["targetId"],
+            "leaseId": msg["leaseId"],
+            "expiresAt": time.time() * 1000 + ttl_ms,
+            "renewWithinMs": 5000,
+            "idleReleaseMs": 300000,
+            "mode": "exclusive",
+        }
+
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_renew_takes_the_new_expiry_from_an_uncorrelated_control_granted():
+    client, socket = await connect_client(
+        {
+            "control.request": control_granted_handler(ttl_ms=30000),
+            "control.renew": _uncorrelated_renew_handler(ttl_ms=90000),
+        }
+    )
+    try:
+        lease = await client.acquire_control(auto_renew=False)
+        before = lease.expires_at
+        await asyncio.wait_for(lease.renew(), timeout=2)
+        assert lease.expires_at > before + 30000
+        assert lease.is_valid
+        assert socket.sent_json_messages()[-1]["t"] == "control.renew"
+    finally:
+        await client.close()

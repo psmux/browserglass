@@ -23,6 +23,61 @@ from __future__ import annotations
 
 LOCATOR_REF_ATTRIBUTE = "data-bgls-ref"
 
+#: The gateway's ceiling on one evaluate source, mirrored from
+#: ``MAX_EVALUATE_SOURCE_BYTES`` in ``packages/protocol/src/wire/messages/evaluate.ts``.
+MAX_EVALUATE_SOURCE_BYTES = 32768
+
+
+def compact_page_script(source: str) -> str:
+    """Shrinks a page side script before it goes on the wire.
+
+    A line for line port of ``compactPageScript`` in
+    ``packages/automation/src/locator/compact.ts``; see that file for the
+    full reasoning. Change both together.
+
+    The gateway refuses evaluate source over ``MAX_EVALUATE_SOURCE_BYTES``
+    (32768). This drops blank lines, ``//`` comment lines and block comments
+    that start a line, and strips each kept line's surrounding whitespace.
+    It never edits inside a line and keeps the line breaks between kept
+    lines. That is safe only when no literal spans a line break, so it
+    raises on a backtick, on a line ending in a backslash, and on any block
+    comment marker it cannot account for. A raise happens at import, so the
+    test suite catches a script this cannot handle.
+    """
+    if "`" in source:
+        raise ValueError("compact_page_script: the source contains a backtick; template literals can span lines and are not supported")
+    kept: list[str] = []
+    in_block_comment = False
+    for i, raw in enumerate(source.split("\n")):
+        line = raw.strip()
+        if line.endswith("\\"):
+            raise ValueError(f"compact_page_script: line {i + 1} ends in a backslash; a string continued across lines is not supported")
+        if in_block_comment:
+            close = line.find("*/")
+            if close == -1:
+                continue
+            if line[close + 2 :].strip() != "":
+                raise ValueError(f"compact_page_script: line {i + 1} has code after the end of a block comment")
+            in_block_comment = False
+            continue
+        if line == "" or line.startswith("//"):
+            continue
+        if line.startswith("/*"):
+            close = line.find("*/", 2)
+            if close == -1:
+                in_block_comment = True
+                continue
+            if line[close + 2 :].strip() != "":
+                raise ValueError(f"compact_page_script: line {i + 1} has code after a block comment on the same line")
+            continue
+        if "/*" in line or "*/" in line:
+            raise ValueError(f"compact_page_script: line {i + 1} has a block comment marker that does not start the line")
+        kept.append(line)
+    if in_block_comment:
+        raise ValueError("compact_page_script: the source ends inside a block comment")
+    return "\n".join(kept)
+
+
 _RESOLVER_CORE = r"""
 var BGLS_REF_ATTR = "data-bgls-ref";
 
@@ -449,9 +504,9 @@ function bglsSatisfied(state, res, index) {
 }
 """
 
-RESOLVE_SCRIPT = "(spec) => {\n" + _RESOLVER_CORE + "\n  return bglsResolve(spec);\n}"
+RESOLVE_SCRIPT = compact_page_script("(spec) => {\n" + _RESOLVER_CORE + "\n  return bglsResolve(spec);\n}")
 
-WAIT_SCRIPT = "(spec) => {\n" + _RESOLVER_CORE + r"""
+WAIT_SCRIPT = compact_page_script("(spec) => {\n" + _RESOLVER_CORE + r"""
   var check = spec.check;
   var stampSpec = spec.stamp;
   return new Promise(function (resolve) {
@@ -520,9 +575,9 @@ WAIT_SCRIPT = "(spec) => {\n" + _RESOLVER_CORE + r"""
     timer = setTimeout(function () { finish({ timedOut: true, result: last }); }, spec.deadlineMs);
     run();
   });
-}"""
+}""")
 
-READ_SCRIPT = r"""(spec) => {
+READ_SCRIPT = compact_page_script(r"""(spec) => {
   var attr = "data-bgls-ref";
   var sel = '[' + attr + '="' + (window.CSS && CSS.escape ? CSS.escape(spec.ref) : spec.ref) + '"]';
   var el = document.querySelector(sel);
@@ -538,18 +593,18 @@ READ_SCRIPT = r"""(spec) => {
     out.value = typeof el.value === 'string' ? el.value : null;
   }
   return out;
-}"""
+}""")
 
-DISPATCH_CLICK_SCRIPT = r"""(spec) => {
+DISPATCH_CLICK_SCRIPT = compact_page_script(r"""(spec) => {
   var attr = "data-bgls-ref";
   var sel = '[' + attr + '="' + (window.CSS && CSS.escape ? CSS.escape(spec.ref) : spec.ref) + '"]';
   var el = document.querySelector(sel);
   if (!el) return { found: false };
   el.click();
   return { found: true };
-}"""
+}""")
 
-CLEAR_SCRIPT = r"""(spec) => {
+CLEAR_SCRIPT = compact_page_script(r"""(spec) => {
   var attr = "data-bgls-ref";
   var sel = '[' + attr + '="' + (window.CSS && CSS.escape ? CSS.escape(spec.ref) : spec.ref) + '"]';
   var el = document.querySelector(sel);
@@ -566,9 +621,9 @@ CLEAR_SCRIPT = r"""(spec) => {
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   return { found: true, cleared: true };
-}"""
+}""")
 
-SELECT_SCRIPT = r"""(spec) => {
+SELECT_SCRIPT = compact_page_script(r"""(spec) => {
   var attr = "data-bgls-ref";
   var sel = '[' + attr + '="' + (window.CSS && CSS.escape ? CSS.escape(spec.ref) : spec.ref) + '"]';
   var el = document.querySelector(sel);
@@ -627,4 +682,4 @@ SELECT_SCRIPT = r"""(spec) => {
     }
   }
   return { found: true, values: values, labels: labels };
-}"""
+}""")
