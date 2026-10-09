@@ -1525,7 +1525,7 @@ class AutomationClient:
                 fut.set_result(
                     DownloadResult(
                         download_id=msg["downloadId"], size_bytes=msg["sizeBytes"], sha256=msg["sha256"],
-                        url=msg["url"], expires_at=msg["expiresAt"],
+                        url=self._core.resolve_gateway_url(msg["url"]), expires_at=msg["expiresAt"],
                     )
                 )
             elif t == "download.failed":

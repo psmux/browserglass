@@ -83,6 +83,39 @@ alone can be tens of kilobytes), so the download path is not a rare
 fallback here, it is the common case, and it is fully built rather than
 left as a documented gap.
 
+## Fetching `pdf.url`
+
+`pdf.url` from `AutomationClient.pdf()` is an absolute `http(s)` URL. GET
+it with any HTTP client. No `Authorization` header is needed, because the
+random token in the URL is the credential, and it works once: the first
+GET consumes it, and it stops working at `expiresAt` (60 seconds by
+default, `limits.downloadUrlTtlMs`) whether or not anyone fetched it.
+
+```ts
+const pdf = await client.pdf();
+const bytes = pdf.data !== undefined
+  ? Buffer.from(pdf.data, 'base64')
+  : Buffer.from(await (await fetch(pdf.url!)).arrayBuffer());
+```
+
+What the gateway puts on the wire (`page.pdf.got.url`, and
+`download.ready.url` for a real browser download) depends on whether
+`publicUrl` is configured:
+
+* With `publicUrl` set, it is already absolute:
+  `<publicUrl origin><basePath>/v1/downloads/<token>`.
+* Without it, it is a path from the host root that already includes the
+  base path, `/browserglass/v1/downloads/<token>` under the default
+  `basePath`. Resolve it against the gateway's origin
+  (`new URL(url, 'http://127.0.0.1:7443')`), never by appending it to the
+  base path.
+
+`AutomationClient` (and the Python client's `wait_for_download`) does
+that resolution for you against the origin its socket dialed, so callers
+of those clients only ever see the absolute form. Only code reading the
+raw wire message has to care. `DownloadStore.issueUrl` in
+`packages/server/src/downloads/download-store.ts` builds the URL.
+
 ## The refusal, when there is nowhere to put the bytes
 
 When the gateway has no download store configured at all, or the finished

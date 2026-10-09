@@ -91,7 +91,7 @@ describe('AutomationClient', () => {
       sizeBytes: 500000,
       gen: 1,
       downloadId: 'pdf_big',
-      url: '/v1/downloads/faketoken',
+      url: '/browserglass/v1/downloads/faketoken',
       expiresAt: Date.now() + 60000,
       sha256: 'a'.repeat(64),
     });
@@ -101,10 +101,31 @@ describe('AutomationClient', () => {
     const result = await pdfPromise;
     expect(result.data).toBeUndefined();
     expect(result.downloadId).toBe('pdf_big');
-    expect(result.url).toBe('/v1/downloads/faketoken');
+    // The gateway sends a base path inclusive path; the client hands back
+    // an absolute URL on the origin its socket dialed (wss -> https).
+    expect(result.url).toBe('https://gateway.test/browserglass/v1/downloads/faketoken');
     expect(result.sizeBytes).toBe(500000);
     expect(result.sha256).toBe('a'.repeat(64));
 
+    client.close();
+  });
+
+  it('pdf() passes an already absolute url (gateway publicUrl set) through unchanged', async () => {
+    const { client, gateway } = await connectFakeClient();
+    gateway.pdfResponder = (msg) => ({
+      t: 'page.pdf.got',
+      pdfId: 'pdf_big',
+      targetId: msg['targetId'],
+      sizeBytes: 500000,
+      gen: 1,
+      downloadId: 'pdf_big',
+      url: 'https://public.example/bg/v1/downloads/tok',
+      expiresAt: Date.now() + 60000,
+      sha256: 'a'.repeat(64),
+    });
+    const pdfPromise = client.pdf();
+    await tick();
+    expect((await pdfPromise).url).toBe('https://public.example/bg/v1/downloads/tok');
     client.close();
   });
 

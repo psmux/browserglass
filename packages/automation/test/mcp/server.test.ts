@@ -690,7 +690,7 @@ describe('the automation MCP server', () => {
       sizeBytes: 500000,
       gen: 1,
       downloadId: 'pdf_big',
-      url: '/v1/downloads/faketoken',
+      url: '/browserglass/v1/downloads/faketoken',
       expiresAt: Date.now() + 60000,
       sha256: 'a'.repeat(64),
     });
@@ -701,7 +701,7 @@ describe('the automation MCP server', () => {
     const trailer = trailerOf(result.content[0]?.text ?? '');
     expect(trailer['data']).toBeUndefined();
     expect(trailer['downloadId']).toBe('pdf_big');
-    expect(trailer['url']).toBe('/v1/downloads/faketoken');
+    expect(trailer['url']).toBe('https://gateway.test/browserglass/v1/downloads/faketoken');
     expect(trailer['sizeBytes']).toBe(500000);
     // The summary text tells an LLM caller to fetch the URL rather than
     // treating a "success" result as though the bytes were already handed

@@ -898,7 +898,7 @@ export class AutomationClient {
           sizeBytes: reply.sizeBytes,
           ...(reply.data !== undefined ? { data: reply.data } : {}),
           ...(reply.downloadId !== undefined ? { downloadId: reply.downloadId } : {}),
-          ...(reply.url !== undefined ? { url: reply.url } : {}),
+          ...(reply.url !== undefined ? { url: this.core.resolveGatewayUrl(reply.url) } : {}),
           ...(reply.expiresAt !== undefined ? { expiresAt: reply.expiresAt } : {}),
           ...(reply.sha256 !== undefined ? { sha256: reply.sha256 } : {}),
         };
@@ -3114,7 +3114,7 @@ export class AutomationClient {
           downloadId: m.downloadId,
           sizeBytes: m.sizeBytes,
           sha256: m.sha256,
-          url: m.url,
+          url: this.core.resolveGatewayUrl(m.url),
           expiresAt: m.expiresAt,
         });
       } else if (msg.t === 'download.failed') {

@@ -424,6 +424,15 @@ export interface PdfResult {
   data?: string;
   /** Set only when `data` is absent: the signed URL delivery, `DownloadResult`'s own shape. */
   downloadId?: string;
+  /**
+   * Absolute `http(s)` URL of the file, ready to GET with no further
+   * joining. The gateway itself sends a path that already includes its
+   * base path (`/browserglass/v1/downloads/<token>` by default), or a full
+   * URL when it has `publicUrl` configured; this client resolves the path
+   * form against the origin its socket dialed. Single use: the first GET
+   * consumes it. No auth header is needed, the token in the URL is the
+   * credential.
+   */
   url?: string;
   /** Epoch ms after which `url` stops working. Set alongside `url`. */
   expiresAt?: number;
@@ -846,6 +855,7 @@ export interface DownloadResult {
   downloadId: string;
   sizeBytes: number;
   sha256: string;
+  /** Absolute `http(s)` URL of the file. Same rules as {@link PdfResult.url}: resolved against the origin this client's socket dialed, base path included, single use. */
   url: string;
   /** Epoch ms after which `url` stops working. */
   expiresAt: number;

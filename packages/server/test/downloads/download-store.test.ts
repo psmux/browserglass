@@ -13,6 +13,7 @@ import {
   type DownloadStore,
   DownloadStoreError,
   createDownloadStore,
+  downloadUrlPrefix,
 } from '../../src/downloads/download-store.js';
 
 const noopLogger = { trace() {}, debug() {}, info() {}, warn() {}, error() {} } as never;
@@ -103,6 +104,39 @@ describe('DownloadStore.issueUrl / takeToken: single use', () => {
     const issued = s.issueUrl('g1', 'report.pdf', 'application/pdf', 1);
     expect(issued.url).toBe(`https://gw.example/v1/downloads/${issued.token}`);
     await s.dispose();
+  });
+
+  it('puts the base path in the URL, since the REST route is mounted under it', async () => {
+    const s = createDownloadStore({
+      root,
+      logger: noopLogger,
+      sweepIntervalMs: 0,
+      basePath: '/browserglass',
+    });
+    const issued = s.issueUrl('g1', 'report.pdf', 'application/pdf', 1);
+    expect(issued.url).toBe(`/browserglass/v1/downloads/${issued.token}`);
+    await s.dispose();
+  });
+
+  it('builds an absolute URL from the public origin plus the base path', async () => {
+    const s = createDownloadStore({
+      root,
+      logger: noopLogger,
+      sweepIntervalMs: 0,
+      publicUrl: 'https://gw.example/',
+      basePath: '/bg',
+    });
+    const issued = s.issueUrl('g1', 'report.pdf', 'application/pdf', 1);
+    expect(issued.url).toBe(`https://gw.example/bg/v1/downloads/${issued.token}`);
+    await s.dispose();
+  });
+
+  it('adds no prefix for a base path of "/"', () => {
+    expect(downloadUrlPrefix(null, '/')).toBe('');
+    expect(downloadUrlPrefix('http://h:1', '/')).toBe('http://h:1');
+    expect(downloadUrlPrefix('http://h:1/ignored/path', '/browserglass')).toBe(
+      'http://h:1/browserglass',
+    );
   });
 
   it('takeToken resolves once, then 404s (returns null) on a second call for the same token', async () => {

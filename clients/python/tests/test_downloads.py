@@ -56,6 +56,25 @@ async def test_wait_for_download_refuses_locally_without_download_capability():
 
 
 @pytest.mark.asyncio
+async def test_wait_for_download_resolves_a_relative_url_against_the_gateway_origin():
+    client, socket = await connect_client({}, granted=GRANTED_WITH_DOWNLOAD)
+    try:
+        async def push_ready():
+            await asyncio.sleep(0.01)
+            await socket.push(
+                {"t": "download.ready", "downloadId": "dl_2", "sizeBytes": 1, "sha256": "x", "url": "/browserglass/v1/downloads/tok", "expiresAt": 1}
+            )
+
+        task = asyncio.ensure_future(push_ready())
+        result = await client.wait_for_download(timeout_ms=2000)
+        await task
+        # conftest dials wss://fake.example/socket, so the download is https on the same host.
+        assert result.url == "https://fake.example/browserglass/v1/downloads/tok"
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
 async def test_wait_for_download_resolves_on_download_ready():
     client, socket = await connect_client({}, granted=GRANTED_WITH_DOWNLOAD)
     try:
