@@ -3,20 +3,285 @@
 [![CI](https://github.com/psmux/browserglass/actions/workflows/ci.yml/badge.svg)](https://github.com/psmux/browserglass/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-BrowserGlass runs real Chrome browsers behind a gateway and streams their tabs live into any web page. A person watching can take the mouse and keyboard at any moment. Code can drive the same browsers through the same protocol, from Node, Python, an MCP capable AI agent, plain REST, or the `bgls` CLI.
+Real Chrome browsers you can drive from code, hand to an AI agent, and watch live in any web page. When the script gets stuck, a person clicks into the stream and takes over. When they let go, the script carries on.
 
-Every browser tab has a control lease, so the gateway always knows who is driving: a script, an agent, or a person. A person outranks an agent by default. The gateway also recovers on its own from page crashes, lost CDP connections and stalled video streams.
+![An agent drives a browser in a web page while a person watches, then the person takes over the same tab](docs/media/agent-and-human.gif)
+
+*Above: the Next.js demo in this repo. An agent called Scout types into the middle tab on its own. Then a person clicks Take control and both drive the same tab. Recorded with BrowserGlass's own session recorder.*
+
+## Showcase
+
+Every clip below is a real run, recorded by BrowserGlass itself, and every one is a script you can run: click a clip to open it. They all use throwaway browsers and public demo sites.
+
+<table>
+<tr>
+<td width="33%" valign="top"><a href="examples/showcase/books-to-csv.mjs"><img src="docs/media/showcase/books-to-csv.gif" alt="Export a book catalog to CSV" width="100%"></a><br><b>Export a book catalog to CSV</b><br><sub>books.toscrape.com · 0:20 · Data extraction</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/demo-shop-checkout.mjs"><img src="docs/media/showcase/demo-shop-checkout.gif" alt="Log in, fill a cart, check out" width="100%"></a><br><b>Log in, fill a cart, check out</b><br><sub>saucedemo.com · 0:17 · Forms and checkout</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/nine-browsers-live.mjs"><img src="docs/media/showcase/nine-browsers-live.gif" alt="Nine browsers live in one page" width="100%"></a><br><b>Nine browsers live in one page</b><br><sub>9 sites at once · 0:14 · Parallel</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="examples/showcase/mcp-agent.mjs"><img src="docs/media/showcase/mcp-agent.gif" alt="An MCP agent drives the browser" width="100%"></a><br><b>An MCP agent drives the browser</b><br><sub>wikipedia.org · 0:12 · Agent workflows</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/wikipedia-research.mjs"><img src="docs/media/showcase/wikipedia-research.gif" alt="Research a topic into notes" width="100%"></a><br><b>Research a topic into notes</b><br><sub>wikipedia.org · 0:12 · Research</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/infobox-table.mjs"><img src="docs/media/showcase/infobox-table.gif" alt="Compare four languages in a table" width="100%"></a><br><b>Compare four languages in a table</b><br><sub>wikipedia.org · 0:12 · Data extraction</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="examples/showcase/todo-app.mjs"><img src="docs/media/showcase/todo-app.gif" alt="Add, complete and filter todos" width="100%"></a><br><b>Add, complete and filter todos</b><br><sub>TodoMVC demo · 0:16 · Testing and QA</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/file-upload.mjs"><img src="docs/media/showcase/file-upload.gif" alt="Upload a file through a form" width="100%"></a><br><b>Upload a file through a form</b><br><sub>the-internet.herokuapp.com · 0:07 · Forms and checkout</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/quotes-by-tag.mjs"><img src="docs/media/showcase/quotes-by-tag.gif" alt="Collect every quote for a tag" width="100%"></a><br><b>Collect every quote for a tag</b><br><sub>quotes.toscrape.com · 0:10 · Data extraction</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="examples/showcase/github-releases.mjs"><img src="docs/media/showcase/github-releases.gif" alt="Pull the latest releases" width="100%"></a><br><b>Pull the latest releases</b><br><sub>github.com · 0:08 · Research</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/typing-test.mjs"><img src="docs/media/showcase/typing-test.gif" alt="Take a typing test, key by key" width="100%"></a><br><b>Take a typing test, key by key</b><br><sub>monkeytype.com · 0:24 · Games and real time</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/play-2048.mjs"><img src="docs/media/showcase/play-2048.gif" alt="Play 2048 with arrow keys" width="100%"></a><br><b>Play 2048 with arrow keys</b><br><sub>play2048.co · 0:27 · Games and real time</sub></td>
+</tr>
+</table>
+
+More about each run, with its output: [`docs/showcase.md`](docs/showcase.md).
+
+## What it does
+
+| | |
+|---|---|
+| Automate | Navigate, click, type, fill forms, upload files, read text, take screenshots and PDFs. Selectors understand CSS, `label=`, `text=` and `role=`. Clicks and keystrokes are real input events, not `element.click()`. |
+| See the page like an agent | `pageMap()` returns every element you can act on, numbered, with its box on screen and whether something covers it. One call instead of guessing selectors. |
+| Stream it live | Any tab, streamed into your web page through a React component, a `<browser-glass>` tag, or a plain JS client. Many people can watch one tab. |
+| Hand control back and forth | Every tab has a control lease. A script, an agent, or a person holds it. People outrank agents by default, and the agent gets told when someone takes over. |
+| Give an AI agent a browser | `bgls mcp` exposes 40 tools over MCP, for Claude Code, Claude Desktop and any other MCP host. |
+| Run many at once | `BrowserSwarm` opens ten or a hundred browsers and runs one function on all of them in parallel. |
+| Keep logins | Persistent profiles keep cookies and storage between runs. |
+| Control the network | Pause, inspect, block or allow requests before they leave the browser. |
+| Record sessions | Record a tab to disk and export it as images or a video. |
+| Use any language | Node and Python clients, a REST API, a CLI, and a documented wire protocol for anything else. |
+
+## Quick start
+
+You need Node 22+, pnpm (through corepack) and Google Chrome or Chromium.
+
+```sh
+git clone https://github.com/psmux/browserglass.git
+cd browserglass
+corepack enable
+pnpm install
+pnpm -r build
+pnpm bgls serve --listen 127.0.0.1:7799
+```
+
+```
+✔ bgls gateway listening at http://127.0.0.1:7799
+ℹ data directory: ./bgls-data
+ℹ ws endpoint:    ws://127.0.0.1:7799/browserglass/socket
+```
+
+That is the gateway. It launches and supervises the Chrome processes. Leave it running and open a second terminal in the same folder:
+
+```sh
+export BGLS_ADMIN_TOKEN=$(pnpm -s bgls token --ttl 900)
+```
+
+Now drive a browser. Save this as `hello.mjs` in the repo folder and run `node hello.mjs`:
+
+```js
+import { AutomationClient } from '@browserglass/automation';
+
+const browser = await AutomationClient.launch(); // reads BGLS_ADMIN_TOKEN
+try {
+  await browser.navigate('https://en.wikipedia.org/wiki/Web_browser');
+  await browser.fill('input[name="search"]', 'Headless browser');
+  await browser.pressKey('Enter');
+  await browser.waitFor('text="Headless browser"');
+  console.log(await browser.text());
+} finally {
+  await browser.release(); // ends the browser
+}
+```
+
+![The browser maps the page, clicks into the search box and types like a person](docs/media/page-map-and-typing.gif)
+
+No code at all? The CLI does the common things:
+
+```sh
+pnpm bgls swarm run --size 5 --action navigate --value https://example.com   # five browsers at once
+pnpm bgls instances list
+pnpm bgls instances screenshot <instanceId> --out shot.png
+pnpm bgls doctor --deep                                                      # checks Chrome, the store, a real launch
+```
+
+The token from `bgls token` lasts 15 minutes at most. Run the export line again when a script says `UNAUTHENTICATED`.
+
+## Use cases
+
+Each one links to a runnable script in [`examples/recipes`](examples/recipes). Every recipe was run against a real gateway before it went in.
+
+### Give Claude (or any MCP agent) a real browser
+
+```sh
+claude mcp add browserglass \
+  -e BGLS_DATA_DIR=/path/to/browserglass/bgls-data \
+  -- node /path/to/browserglass/packages/cli/dist/bin.mjs mcp --endpoint http://127.0.0.1:7799 --headless
+```
+
+Then ask it things like *"Open five browsers with bg_swarm_open, send each to the Wikipedia page of a different programming language, and tell me the year each first appeared."* The agent gets tools for navigating, clicking, filling forms, reading the page, the page map, screenshots, PDFs, console and network logs, recording and swarms. Drop `--headless` to watch the window. Claude Desktop config and more prompts: [`examples/recipes/mcp.md`](examples/recipes/mcp.md).
+
+### Let a person step in: logins, 2FA, CAPTCHAs, approvals
+
+The script does the boring part, stops, and waits for a human. The human opens the same browser in a web page, does the part only a person can do, and lets go. The script picks up where it stopped.
+
+```js
+await browser.fill('label=Username', 'tomsmith');
+await browser.yieldControl('need a person to enter the password');
+await browser.waitForResume({ timeoutMs: 10 * 60_000 }); // a person took over and handed back
+await browser.acquireControl();
+await browser.click('role=button[name="Login"]');
+```
+
+Show the browser to the person with the React component or the `<browser-glass>` tag below. Recipe: [`human-in-the-loop.mjs`](examples/recipes/human-in-the-loop.mjs).
+
+### Screenshot many pages in parallel
+
+```js
+import { BrowserSwarm } from '@browserglass/automation';
+
+const urls = ['https://example.com', 'https://news.ycombinator.com', /* ... */];
+const swarm = await BrowserSwarm.open({ size: urls.length, launch: {} });
+await swarm.all(async (member, i) => {
+  await member.client.navigate(urls[i]);
+  const shot = await member.client.screenshot();
+  writeFileSync(`shot-${i}.png`, Buffer.from(shot.data, 'base64'));
+});
+await swarm.close();
+```
+
+![Nine screenshots from nine browsers that ran at the same time](docs/media/swarm-9-browsers.png)
+
+*Nine browsers, nine sites, one run: about 20 seconds on a laptop.* Recipe: [`parallel-screenshots.mjs`](examples/recipes/parallel-screenshots.mjs).
+
+### Scrape without fighting selectors
+
+`pageMap()` gives you every clickable and fillable element, numbered, with its text, role and position. Pick what you want by name, then act on it.
+
+![Every actionable element on a page, numbered by the page map](docs/media/page-map.png)
+
+```js
+const map = await browser.pageMap();
+const next = map.nodes.find((n) => n.role === 'link' && n.name === 'Next →');
+```
+
+Or just read the text: `await browser.text()`. Recipe: [`scrape-quotes.mjs`](examples/recipes/scrape-quotes.mjs) collects quotes and authors across pages and prints JSON.
+
+### Fill and submit forms
+
+```js
+await browser.navigate('https://httpbin.org/forms/post');
+await browser.fill('label=Customer name', 'Ada Lovelace');
+await browser.fill('label=Telephone', '555 0100');
+await browser.click('label=Medium');
+await browser.click('role=button[name="Submit order"]');
+```
+
+File inputs work too: `await browser.setInputFiles('input[type=file]', ['./invoice.pdf'])`. Recipe: [`fill-form.mjs`](examples/recipes/fill-form.mjs).
+
+### Stay logged in between runs
+
+```js
+const browser = await AutomationClient.launch({ profileKey: 'work-account' });
+```
+
+Same key, same cookies and local storage next time. Log in once (or let a person log in, see above) and every later run starts signed in. Recipe: [`persistent-login.mjs`](examples/recipes/persistent-login.mjs).
+
+### Block images, ads or trackers
+
+![The same page with and without images and stylesheets](docs/media/block-requests.png)
+
+```js
+browser.gate.onPaused((req) => 'deny');
+await browser.gate.enable([
+  { urlPattern: '*', resourceTypes: ['Image'], verdict: 'ask' },
+  { urlPattern: '*doubleclick.net*', verdict: 'deny' },
+]);
+```
+
+`ask` hands each matching request to your function; `allow` and `deny` are decided inside the gateway with no round trip. Recipe: [`block-requests.mjs`](examples/recipes/block-requests.mjs).
+
+### Save pages as PDF
+
+<img src="docs/media/pdf-page1.png" alt="Page one of a Wikipedia article saved as PDF" width="360" align="right">
+
+```js
+const pdf = await browser.pdf({ format: 'A4' });
+```
+
+Small PDFs come back inline as base64; large ones as a download link. Chrome's own print engine renders them, so they look like printing the page. Recipe: [`save-pdf.mjs`](examples/recipes/save-pdf.mjs).
+
+<br clear="right">
+
+### Record a session
+
+```js
+const rec = await browser.startRecording();
+// ... do things ...
+await browser.stopRecording(rec.recordingId);
+```
+
+```sh
+pnpm bgls record export <recordingId> --out frames/   # JPEG frames plus timing
+```
+
+The GIFs on this page were made this way. Recipe: [`record-session.mjs`](examples/recipes/record-session.mjs).
+
+### Put a live browser in your own app
+
+Your server starts a browser and mints a short lived token for it. The page shows the stream, and the user can click into it.
+
+```tsx
+import { BrowserGlass } from '@browserglass/react';
+
+<BrowserGlass url="ws://127.0.0.1:7799/browserglass/socket" token={token} style={{ width: 960, height: 600 }} />
+```
+
+No React? Use the custom element:
+
+```html
+<script src="browserglass-embed.global.js"></script>
+<browser-glass url="ws://127.0.0.1:7799/browserglass/socket" token="eyJ..."></browser-glass>
+```
+
+Build it with `pnpm --filter @browserglass/embed build`. The token comes from two REST calls on your server; see [`docs/quickstart.md`](docs/quickstart.md). If the page is on another origin, start the gateway with `--cors http://localhost:3000`. The React package also has hooks (`useTargets`, `useNav`, `useControlLease`, `usePresence`, `useConsole`, `useNetwork`) and ready made controls under `@browserglass/react/ui`.
+
+### Python
+
+```sh
+pip install -e clients/python
+```
+
+```python
+import asyncio
+from browserglass import AutomationClient
+
+async def main():
+    browser = await AutomationClient.launch()  # reads BGLS_ADMIN_TOKEN
+    try:
+        await browser.navigate("https://example.com")
+        print(await browser.text())
+    finally:
+        await browser.release()
+
+asyncio.run(main())
+```
+
+Same API in snake case, including `BrowserSwarm`. See [`clients/python`](clients/python). Recipe: [`python/quickstart.py`](examples/recipes/python/quickstart.py).
+
+## How it fits together
 
 ```mermaid
 flowchart LR
-  subgraph clients[Your side]
+  subgraph you[Your side]
     W["Web page<br/>React, &lt;browser-glass&gt;, plain JS"]
-    A["Automation<br/>Node, Python, MCP, REST, CLI"]
+    A["Code and agents<br/>Node, Python, MCP, REST, CLI"]
   end
   subgraph gw["bgls gateway"]
-    S["server<br/>WebSocket + REST + auth"]
+    S["server<br/>WebSocket, REST, auth"]
     R["router<br/>placement, quotas, pools, profiles"]
-    C["core<br/>CDP bridge, streaming, input, leases"]
+    C["core<br/>CDP, streaming, input, leases, recovery"]
     DB[("SQLite or Postgres")]
   end
   CH1["Chrome"]
@@ -29,370 +294,67 @@ flowchart LR
   C --> CH1 & CH2 & CH3
 ```
 
-## Status
-
-Alpha. The code works end to end and has a large test suite, but nothing is on npm or PyPI yet, so you run it from a clone. Things that are not there yet are listed under [Limits](#limits) so you do not have to find them the hard way.
-
-## Quick start
-
-You need Node 22 or newer, pnpm (through corepack), and Google Chrome or Chromium installed.
-
-```sh
-git clone https://github.com/psmux/browserglass.git
-cd browserglass
-corepack enable
-pnpm install
-pnpm -r build
-pnpm bgls doctor          # checks Chrome, the store, the port
-pnpm bgls serve --listen 127.0.0.1:7799
-```
-
-You should see:
-
-```
-✔ bgls gateway listening at http://127.0.0.1:7799
-ℹ data directory: ./bgls-data
-ℹ ws endpoint:    ws://127.0.0.1:7799/browserglass/socket
-```
-
-Leave that running. In a second terminal, from the same directory, open ten browsers and send all of them to a page at once:
-
-```sh
-pnpm bgls swarm run --size 10 --action navigate --value https://example.com
-```
-
-Then look at what is running:
-
-```sh
-pnpm bgls instances list
-pnpm bgls instances screenshot <instanceId> --out shot.png
-```
-
-The gateway starts in dev auth mode. It generates a signing key for this run and writes it to `bgls-data/dev-session.json`, which every other `bgls` command in the same directory reads to mint its own token. When a script or app needs an admin token of its own:
-
-```sh
-export ADMIN_TOKEN=$(pnpm bgls token)
-```
-
-If `--listen` is left out the gateway binds `127.0.0.1:7443`. The examples below all use 7799.
-
-## Scenarios
-
-### 1. Show a live browser in your web app
-
-Your server creates a browser and mints a short lived token scoped to it. The page renders the stream and the user can click into it and type.
-
-Server side (any language, it is two REST calls):
-
-```js
-const base = 'http://127.0.0.1:7799/browserglass';
-const headers = { authorization: `Bearer ${process.env.ADMIN_TOKEN}`, 'content-type': 'application/json' };
-
-const instance = await fetch(`${base}/v1/instances`, {
-  method: 'POST',
-  headers,
-  body: JSON.stringify({ requestId: `demo-${Date.now()}`, browser: { headless: 'new' } }),
-}).then((r) => r.json());
-
-const { token } = await fetch(`${base}/v1/tokens`, {
-  method: 'POST',
-  headers,
-  body: JSON.stringify({
-    sub: 'user-42',
-    subKind: 'service',
-    scope: { kind: 'instance', instanceId: instance.instanceId, targets: '*' },
-    caps: ['view', 'control', 'navigate'],
-    ttlSeconds: 300,
-  }),
-}).then((r) => r.json());
-// send `token` to the browser
-```
-
-Browser side, with React:
-
-```tsx
-import { BrowserGlass } from '@browserglass/react';
-
-export function RemoteTab({ token }: { token: string }) {
-  return (
-    <BrowserGlass
-      url="ws://127.0.0.1:7799/browserglass/socket"
-      token={token}
-      style={{ width: 960, height: 600 }}
-    />
-  );
-}
-```
-
-Leave out `targetId` and the component follows whichever tab is active. Tokens are capped at 900 seconds; pass `onTicketExpired` to hand the component a fresh one. The package also has hooks (`useTargets`, `useNav`, `useControlLease`, `usePresence`, `useConsole`, `useNetwork` and more) and ready made controls under `@browserglass/react/ui`.
-
-If the page is served from another origin, start the gateway with `--cors http://localhost:3000`.
-
-### 2. Drop it into any page without React
-
-`@browserglass/embed` is a custom element. Build it once, serve the file, and use it like any tag:
-
-```sh
-pnpm --filter @browserglass/embed build
-# serves packages/embed/dist/browserglass-embed.global.js
-```
-
-```html
-<script src="browserglass-embed.global.js"></script>
-<browser-glass
-  url="ws://127.0.0.1:7799/browserglass/socket"
-  token="eyJ..."
-  fit="contain"
-  style="width: 960px; height: 600px">
-</browser-glass>
-```
-
-Several `<browser-glass>` elements on one page share one connection. [`examples/embed-demo`](examples/embed-demo) shows three at once.
-
-For a framework of your own, `@browserglass/client` is the plain TypeScript client underneath both: `new BrowserGlassClient({ url, token })`, `connect()`, then `subscribe(targetId, { canvas })`.
-
-### 3. Drive a browser from Node
-
-```ts
-import { AutomationClient } from '@browserglass/automation';
-
-const client = await AutomationClient.connect({
-  endpoint: 'ws://127.0.0.1:7799/browserglass/socket',
-  token, // instance scoped, with the "automation" and "evaluate" caps
-});
-
-const lease = await client.acquireControl();
-await client.navigate('https://example.com/signup');
-await client.fill('label=Email address', 'ada@example.com');
-await client.click('role=button[name="Create account"]');
-console.log(await client.text());
-await lease.release();
-client.close();
-```
-
-Locators accept CSS, `label=`, `text=`, `role=` and more. Clicks are real mouse events at real coordinates, typing sends real key events, and every action checks that the element is visible and not covered first. Also on the client: `waitFor`, `pageMap()` (an indexed inventory of everything clickable or fillable on the page), `screenshot()`, `pdf()`, `a11y()`, `setInputFiles`, request interception through `client.gate`, and session recording.
-
-### 4. Drive a browser from Python
-
-```sh
-pip install -e clients/python
-```
-
-```python
-import asyncio, os
-from browserglass import AutomationClient, RestClient
-
-async def main():
-    rest = RestClient(base_url="http://127.0.0.1:7799/browserglass", token=os.environ["ADMIN_TOKEN"])
-    acquired = await rest.acquire(browser={"headless": True})
-    client = await AutomationClient.connect(endpoint=acquired.attach.ws_url, token=acquired.attach.ticket)
-
-    await client.acquire_control()
-    await client.navigate("https://example.com")
-    print(await client.text())
-
-    await client.close()
-    await rest.release(acquired.instance_id)
-    await rest.aclose()
-
-asyncio.run(main())
-```
-
-The Python client speaks the same wire protocol and has no dependency on the Node build. It mirrors the Node API in snake case and includes its own `BrowserSwarm`. See [`clients/python`](clients/python).
-
-### 5. Give an AI agent a browser over MCP
-
-`bgls mcp` starts an MCP server over stdio. Add it to Claude Desktop, Claude Code, or any other MCP host:
-
-```json
-{
-  "mcpServers": {
-    "browserglass": {
-      "command": "node",
-      "args": [
-        "/absolute/path/to/browserglass/packages/cli/dist/bin.mjs",
-        "mcp",
-        "--endpoint", "http://127.0.0.1:7799"
-      ],
-      "env": { "BGLS_ADMIN_TOKEN": "paste the output of pnpm bgls token" }
-    }
-  }
-}
-```
-
-The agent gets tools for navigation, clicking, typing, filling forms, reading the page, the page map, screenshots, PDF, console and network logs, recording, and `bg_swarm_*` for opening many browsers at once. Point the host at `node` and the built `dist/bin.mjs` as above; MCP hosts spawn the command without a shell, so a bare `bgls` will not resolve.
-
-While the agent works, you can watch the same browser live in a page from scenario 1 or 2.
-
-### 6. An agent drives, a person takes over
-
-The agent holds the control lease. When a person clicks into the stream, they outrank the agent (human priority 100, agent 50), the agent receives a yield event, and the person drives until they hand control back.
-
-```ts
-client.onControlYield((ev) => {
-  if (ev.human) {
-    // a person took over: stop issuing actions
-  }
-});
-
-await client.waitForResume();   // the person released control
-await client.acquireControl();  // carry on
-```
-
-The default is exclusive control: one driver at a time, everyone else watches. Set `session: { control: { mode: 'shared' } }` on the server to let both drive at once. [`docs/agent-and-human.md`](docs/agent-and-human.md) covers the three patterns and when each one bites. [`examples/nextjs-demo`](examples/nextjs-demo) is a complete app built on this.
-
-### 7. Several people on one browser
-
-Any number of viewers can watch one tab. In exclusive mode there is a queue for control; in shared mode everyone drives. The React package ships presence, a viewer list, live cursors and a control badge. See [`docs/collaboration.md`](docs/collaboration.md).
-
-### 8. A swarm: many browsers in parallel
-
-From the CLI:
-
-```sh
-pnpm bgls swarm run --size 10 --action navigate --value https://example.com --headless
-pnpm bgls swarm run --size 10 --action screenshot
-```
-
-From Node, `BrowserSwarm` runs one callback against every member concurrently. You supply `acquire()`, so you decide where each browser comes from:
-
-```ts
-import { BrowserSwarm } from '@browserglass/automation';
-
-const base = 'http://127.0.0.1:7799/browserglass';
-const headers = { authorization: `Bearer ${process.env.ADMIN_TOKEN}`, 'content-type': 'application/json' };
-
-async function acquire(index: number) {
-  const inst = await fetch(`${base}/v1/instances`, {
-    method: 'POST', headers,
-    body: JSON.stringify({ requestId: `swarm-${Date.now()}-${index}`, browser: { headless: 'new' } }),
-  }).then((r) => r.json());
-  const { token } = await fetch(`${base}/v1/tokens`, {
-    method: 'POST', headers,
-    body: JSON.stringify({
-      sub: 'swarm', subKind: 'service',
-      scope: { kind: 'instance', instanceId: inst.instanceId, targets: '*' },
-      caps: ['view', 'control', 'navigate', 'automation'], ttlSeconds: 300,
-    }),
-  }).then((r) => r.json());
-  return { instanceId: inst.instanceId, wsUrl: 'ws://127.0.0.1:7799/browserglass/socket', token };
-}
-
-const swarm = await BrowserSwarm.open({ size: 10, url: 'https://example.com', acquire });
-const results = await swarm.all((member) => member.client.status());
-await swarm.grow(5);
-await swarm.shrink(3);
-await swarm.close();
-```
-
-Use a fresh `requestId` per member. The router deduplicates repeat requests inside a 300 second window, so reusing one id gives you the same browser ten times. To get the same browsers back on the next run instead of new ones, pass a sticky subject (`--sticky-subject` on the CLI, `subject` in code). [`packages/automation/PARALLELISM.md`](packages/automation/PARALLELISM.md) lists the limits a swarm actually runs into.
-
-### 9. Embed the gateway in your own Node server
-
-Skip the CLI and run the gateway inside your process:
-
-```js
-import { createServer } from 'node:http';
-import { createBrowserGlass, generateEd25519KeyMaterial } from '@browserglass/server';
-
-const signingKey = { kid: 'dev', alg: 'EdDSA', ...generateEd25519KeyMaterial() };
-const bg = createBrowserGlass({
-  mode: 'embedded',
-  basePath: '/browserglass',
-  tenantId, appId,
-  store, runtime,
-  profiles: { dir: profilesDir, fs: createProfileFs({ root: profilesDir }) },
-  auth: { keys: [signingKey], issuer: appId },
-});
-
-const server = createServer((req, res) =>
-  bg.handleRequest(req, res).then((handled) => { if (!handled) res.writeHead(404).end(); }));
-bg.attach(server);
-await bg.start();
-server.listen(7500);
-```
-
-[`examples/minimal/server.mjs`](examples/minimal/server.mjs) is the full, runnable version, including the store and runtime setup. Adapters for Express, Fastify, Hono and Next.js live in `@browserglass/server`.
-
-### 10. Run it bigger
-
-* **Postgres instead of SQLite:** `pnpm bgls serve --store postgres://user:pass@host/db`.
-* **Remote Chrome:** attach to browsers you already run elsewhere, in containers or on other machines, through their CDP endpoint:
-  `BGLS_REMOTE_ENDPOINTS=box1=http://10.0.0.5:9222,box2=http://10.0.0.6:9222 pnpm bgls serve --runtime remote`
-* **Limits and pools:** admission checks tenant, app, pool and per user ceilings. When a pool is full it rejects, evicts an idle browser, or queues, depending on its `onFull` policy.
-* **Several gateways:** point them at one shared store and give each a peer secret. Placement then spans nodes. See [`docs/scaling.md`](docs/scaling.md) for what works across nodes today and what does not.
-* **Playwright or Puppeteer:** an optional CDP proxy (`BGLS_CDP_PROXY_ENABLED=1`) lets existing Playwright or Puppeteer code connect to a BrowserGlass browser. See [`docs/cdp-and-interception.md`](docs/cdp-and-interception.md).
-
-## Other features
-
-| Feature | Where |
-|---|---|
-| Session recording, export to video through an ffmpeg plugin | `bgls record start/stop/list/export`, [`docs/recording.md`](docs/recording.md) |
-| Render a tab to PDF | `client.pdf()`, `bg_pdf`, [`docs/pdf.md`](docs/pdf.md) |
-| Page map: everything an agent can act on, in one call | `client.pageMap()`, `bg_page_map`, [`docs/page-map.md`](docs/page-map.md) |
-| Pause, inspect and modify network requests | `client.gate`, [`docs/cdp-and-interception.md`](docs/cdp-and-interception.md) |
-| Persistent browser profiles (cookies and logins survive) | `--profile-key`, [`docs/ownership.md`](docs/ownership.md) |
-| Reduced automation fingerprint | [`docs/stealth.md`](docs/stealth.md) |
-| Attach to a Chrome you already have open | `bgls attach` |
-| Plugins, installed on purpose and loaded only by the CLI | `bgls plugins add/list/remove`, [`docs/plugins.md`](docs/plugins.md) |
-| Health checks, including a real launch and click round trip | `bgls doctor --deep` |
+Everything talks to the gateway. Your code never touches Chrome directly, which is what lets a person and a script share a tab safely, and lets the gateway restart a crashed page without your script noticing much.
+
+## Running it bigger
+
+* Postgres instead of SQLite: `pnpm bgls serve --store postgres://user:pass@host/db`.
+* Chrome on other machines or in containers: `BGLS_REMOTE_ENDPOINTS=box1=http://10.0.0.5:9222,box2=http://10.0.0.6:9222 pnpm bgls serve --runtime remote`.
+* Limits: tenant, app, pool and per user ceilings. A full pool rejects, evicts an idle browser, or queues.
+* Several gateways: point them at one shared store. See [`docs/scaling.md`](docs/scaling.md) for what works across nodes today.
+* Embed the gateway in your own Node server instead of running `bgls serve`: [`examples/minimal/server.mjs`](examples/minimal/server.mjs). Adapters for Express, Fastify, Hono and Next.js are in `@browserglass/server`.
+* Playwright and Puppeteer can connect through an optional CDP proxy: [`docs/cdp-and-interception.md`](docs/cdp-and-interception.md).
 
 ## Packages
 
-| Package | What it does |
+| Package | What it is |
 |---|---|
-| `@browserglass/protocol` | Wire types, binary frame codec, capabilities. No runtime dependencies. |
-| `@browserglass/core` | The live session engine: CDP bridge, streaming, input, control leases, recovery. |
-| `@browserglass/router` | Control plane: placement, admission, quotas, pools, warm pool, profiles. |
-| `@browserglass/server` | The gateway: `createBrowserGlass()`, WebSocket protocol, JWT auth, REST, framework adapters. |
-| `@browserglass/client` | Framework agnostic browser client: transport, canvas renderer, input capture. |
-| `@browserglass/react` | `<BrowserGlass />`, hooks, and UI primitives. |
+| `@browserglass/automation` | `AutomationClient`, `BrowserSwarm`, and the MCP server. Start here for scripts. |
+| `@browserglass/react` | `<BrowserGlass />`, hooks and UI pieces for showing a live browser. |
 | `@browserglass/embed` | The `<browser-glass>` custom element. |
-| `@browserglass/automation` | `AutomationClient`, `BrowserSwarm`, and the MCP server. |
+| `@browserglass/client` | The framework free browser client underneath both. |
 | `@browserglass/cli` | The `bgls` command. |
-| `@browserglass/plugin-api` | Plugin manifest types and validators. |
-| `@browserglass/store-sqlite`, `store-postgres` | Persistence. |
+| `@browserglass/server` | The gateway, to embed in your own Node process. |
+| `@browserglass/core`, `router`, `protocol` | Session engine, control plane, wire types. |
 | `@browserglass/runtime-host`, `runtime-remote` | Launch Chrome locally, or attach to a remote CDP endpoint. |
-| `@browserglass/runtime-docker`, `runtime-k8s` | Placeholders, see Limits. |
-| `@browserglass/conformance` | Protocol vectors, store contract tests, end to end tests. Not published. |
+| `@browserglass/store-sqlite`, `store-postgres` | Persistence. |
+| `@browserglass/plugin-api` | Types for writing plugins. |
+| [`clients/python`](clients/python) | The Python client. |
 
 ## Examples
 
-| Example | Run it |
+| | |
 |---|---|
-| [`examples/minimal`](examples/minimal): one Node file and one HTML page | `node examples/minimal/server.mjs`, open http://localhost:7500 |
-| [`examples/embed-demo`](examples/embed-demo): three live panes on a static page | see its README |
-| [`examples/nextjs-demo`](examples/nextjs-demo): an agent drives, a person watches and takes over | `cd examples/nextjs-demo && npm install && npm run dev` |
+| [`examples/recipes`](examples/recipes) | Small scripts, one job each. The use cases above. |
+| [`examples/nextjs-demo`](examples/nextjs-demo) | The app in the GIF at the top: an agent drives, people watch and take over. `cd examples/nextjs-demo && npm install && npm run dev` |
+| [`examples/minimal`](examples/minimal) | The smallest app that shows a live browser: one Node file, one HTML page. |
+| [`examples/embed-demo`](examples/embed-demo) | Three live `<browser-glass>` panes on a static page. |
 
-All three expect `pnpm install && pnpm -r build` at the repo root first.
+All of them expect `pnpm install && pnpm -r build` at the repo root first.
 
 ## Limits
 
-Read this before you plan around a feature.
-
-* Platforms: Windows is the most tested. Linux runs the full suite apart from a few browser lifecycle tests. On macOS, launching a local Chrome does not work yet. Fixes are in progress; until then, macOS users can attach to a Chrome they start themselves with `--runtime remote`.
-* Nothing is published to npm or PyPI yet. Use a clone.
-* `bgls serve` only supports dev auth. For real identity (JWKS or HMAC), embed `@browserglass/server` and configure `auth` yourself.
-* The Docker and Kubernetes runtimes are placeholders. Use `host` for local Chrome, or `remote` to attach to Chrome you run in containers yourself.
-* Several gateways can share placement through one store, but a viewer cannot attach to a browser on another node yet.
-* Some CLI commands (`profiles`, `sessions`, `tenants`, `pools`, `backup` and a few others) are registered but print "not implemented".
+* Alpha. Nothing is on npm or PyPI yet, so you run it from a clone.
+* `bgls serve` only does dev auth, with a key generated per run. For real identity, embed `@browserglass/server` and configure `auth` yourself.
+* The Docker and Kubernetes runtimes are placeholders. Use `host` for local Chrome, or `remote` for Chrome you run in containers yourself.
+* Several gateways can share placement through one store, but a viewer cannot yet attach to a browser on another node.
+* Some CLI commands (`profiles`, `sessions`, `tenants`, `pools`, `backup` and a few more) print "not implemented".
 
 ## Guides
 
 | Guide | Covers |
 |---|---|
-| [`docs/quickstart.md`](docs/quickstart.md) | Ten browsers in parallel, four ways: CLI, Node, MCP, REST plus WebSocket. |
-| [`docs/installing.md`](docs/installing.md) | Installing from a clone. |
-| [`docs/adopting.md`](docs/adopting.md) | Ways to adopt BrowserGlass and what each costs. |
-| [`docs/agent-and-human.md`](docs/agent-and-human.md) | Handoff between an agent and a person. |
+| [`docs/quickstart.md`](docs/quickstart.md) | Ten browsers in parallel four ways: CLI, Node, MCP, REST. Minting viewer tokens. |
+| [`docs/agent-and-human.md`](docs/agent-and-human.md) | How control passes between an agent and a person. |
 | [`docs/collaboration.md`](docs/collaboration.md) | Several people on one browser. |
 | [`docs/ownership.md`](docs/ownership.md) | Getting the same browser back instead of a new one. |
-| [`docs/scaling.md`](docs/scaling.md) | More than one gateway. |
-| [`docs/cdp-and-interception.md`](docs/cdp-and-interception.md) | CDP proxy and request interception. |
+| [`docs/page-map.md`](docs/page-map.md) | What the page map returns and what it promises. |
+| [`docs/cdp-and-interception.md`](docs/cdp-and-interception.md) | The CDP proxy and request interception. |
+| [`docs/recording.md`](docs/recording.md), [`docs/pdf.md`](docs/pdf.md) | Recording and PDF. |
 | [`docs/stealth.md`](docs/stealth.md) | What the default launch does about automation signals, and what it does not. |
-| [`docs/recording.md`](docs/recording.md), [`docs/pdf.md`](docs/pdf.md), [`docs/page-map.md`](docs/page-map.md) | Recording, PDF, page map. |
-| [`docs/plugins.md`](docs/plugins.md) | Writing and installing plugins. |
-| [`docs/protocol/wire-spec.md`](docs/protocol/wire-spec.md) | The `bgls.v1` wire protocol, for writing a client in another language. |
+| [`docs/scaling.md`](docs/scaling.md) | More than one gateway. |
+| [`docs/plugins.md`](docs/plugins.md) | Plugins, such as video export. |
+| [`docs/protocol/wire-spec.md`](docs/protocol/wire-spec.md) | The `bgls.v1` protocol, for writing a client in another language. |
 
 ## Development
 
@@ -404,7 +366,7 @@ pnpm lint
 pnpm test
 ```
 
-Tests that need a real Chrome skip themselves when none is installed.
+Tests that need a real Chrome skip themselves when none is installed. CI runs the full suite on Linux, Windows and macOS.
 
 ## License
 
