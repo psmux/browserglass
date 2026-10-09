@@ -59,6 +59,7 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSy
 import { dirname, join, resolve } from 'node:path';
 import type { RecordedFrameEntry, RecordingMeta } from '@browserglass/core';
 import type { EncodeRequest, EncodeResult, EncoderFrame } from '@browserglass/plugin-api';
+import { decodeBinaryHeader } from '@browserglass/protocol';
 import { defineCommand } from 'citty';
 import {
   GLOBAL_ARGS,
@@ -382,6 +383,19 @@ function frameFileName(frameIndex: number): string {
 }
 
 /** Sniffs whether `bytes` is a PNG or JPEG (the only two codecs a recorded frame can be, per `packages/core/src/stream/types.ts`'s `EncodeSpec.codec`), by magic number, the same check `frame-dimensions.ts` already relies on for the same two formats. */
+/**
+ * The recorder stores each frame as it went over the wire: the 20 byte
+ * `bgls.v1` binary header (magic "BG") followed by the encoded image. An
+ * export promises standalone images, so strip the header when it is there.
+ * Bytes that do not start with the magic are passed through unchanged.
+ */
+export function imageBytesOf(bytes: Uint8Array): Uint8Array {
+  if (bytes.length > 2 && bytes[0] === 0x42 && bytes[1] === 0x47) {
+    return decodeBinaryHeader(bytes).payload;
+  }
+  return bytes;
+}
+
 function sniffExtension(bytes: Uint8Array): 'png' | 'jpg' | 'bin' {
   if (
     bytes.length >= 8 &&
@@ -419,7 +433,7 @@ export function runRecordExport(
       missing += 1;
       continue;
     }
-    const bytes = new Uint8Array(readFileSync(framePath));
+    const bytes = imageBytesOf(new Uint8Array(readFileSync(framePath)));
     const ext = sniffExtension(bytes);
     const file = `${String(entry.frameIndex).padStart(8, '0')}.${ext}`;
     writeFileSync(join(outDir, file), bytes);

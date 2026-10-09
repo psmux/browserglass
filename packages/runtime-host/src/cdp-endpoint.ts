@@ -25,13 +25,31 @@ export interface DevToolsActivePortContents {
 function readDevToolsActivePort(profilePath: string): DevToolsActivePortContents | null {
   const path = join(profilePath, 'DevToolsActivePort');
   if (!existsSync(path)) return null;
-  const content = readFileSync(path, 'utf8');
+  let content: string;
+  try {
+    content = readFileSync(path, 'utf8');
+  } catch (err) {
+    // Chrome writes this file while the poll below may be reading it. On
+    // Windows the read then fails with EBUSY (or EPERM/EACCES) because the
+    // file is still held open, and it can vanish between the existsSync
+    // check and the read. All of those mean "not ready yet", so the poll
+    // simply tries again on its next tick.
+    if (isNotReadyYet(err)) return null;
+    throw err;
+  }
   const lines = content.split('\n');
   const portLine = lines[0]?.trim();
   const browserPath = lines[1]?.trim() ?? '';
   const port = portLine ? Number(portLine) : Number.NaN;
   if (!portLine || Number.isNaN(port)) return null;
   return { port, browserPath };
+}
+
+const NOT_READY_YET_CODES: ReadonlySet<string> = new Set(['EBUSY', 'EPERM', 'EACCES', 'ENOENT']);
+
+function isNotReadyYet(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  return typeof code === 'string' && NOT_READY_YET_CODES.has(code);
 }
 
 /** Polls for `DevToolsActivePort` to appear, up to `deadlineAt` (wall clock ms). */

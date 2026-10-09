@@ -60,6 +60,18 @@ export function profileLockedError(profilePath: string, pid: number): LaunchErro
   });
 }
 
+/** `E_NO_DISPLAY`: a headful launch on Linux with neither `DISPLAY` nor `WAYLAND_DISPLAY` set, which Chrome cannot start under. */
+export function noDisplayError(): LaunchError {
+  return new LaunchError({
+    code: 'E_NO_DISPLAY',
+    phase: 'preflight',
+    message: "headless: 'off' needs a display, and neither DISPLAY nor WAYLAND_DISPLAY is set",
+    remediation:
+      "use headless: 'new', or run under a display server (for example xvfb-run) so DISPLAY is set",
+    retryable: false,
+  });
+}
+
 /** `E_CDP_TIMEOUT`: the CDP endpoint never confirmed the expected identity before the deadline. */
 export function cdpTimeoutError(detail: string, phase: LaunchPhase = 'cdpWait'): LaunchError {
   return new LaunchError({

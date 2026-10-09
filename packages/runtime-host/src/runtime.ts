@@ -36,6 +36,7 @@ import type { HostRuntimeConfig } from './config.js';
 import {
   cdpTimeoutError,
   foreignOwnerError,
+  noDisplayError,
   noValidLeaseError,
   profileLockedError,
   stealthArgDeniedError,
@@ -48,13 +49,39 @@ import { listAllProfileDirs, reconcileOnStartup } from './reconcile.js';
 import { killProcessTree, resolveBrowserPid, spawnDetachedChrome } from './spawn.js';
 import type { StateFileEntry, StateFileStore } from './state-file.js';
 import { resolveRequiredStealthProfile, validateStealthProfiles } from './stealth.js';
-import { BrowserSupervisor } from './supervisor.js';
+import { BrowserSupervisor, StderrRingBuffer } from './supervisor.js';
 import { terminateBrowser } from './terminate.js';
 
 interface LiveEntry {
   handle: LaunchedBrowser;
   supervisor: BrowserSupervisor;
   exitListeners: Set<(info: ExitInfo) => void>;
+}
+
+/** How long a reaped orphan gets to exit on SIGTERM before the reap escalates to SIGKILL. */
+const ORPHAN_SIGTERM_GRACE_MS = 3000;
+
+/**
+ * Waits until no browser main process holds `profilePath`, escalating to
+ * SIGKILL after {@link ORPHAN_SIGTERM_GRACE_MS}. Without this the launch
+ * that follows a reap races the dying process for the profile's
+ * SingletonLock, and on Linux the dying process usually wins. Returns
+ * quietly at `deadlineAt`: whatever still holds the profile then is
+ * reported by the launch's own CDP wait, with better context than this
+ * could give.
+ */
+async function waitForProfileRelease(profilePath: string, deadlineAt: number): Promise<void> {
+  const escalateAt = Date.now() + ORPHAN_SIGTERM_GRACE_MS;
+  let escalated = false;
+  while (Date.now() < deadlineAt) {
+    const holders = await chromeProcsForDataDirAsync(profilePath, { maxAgeMs: 0 });
+    if (holders.length === 0) return;
+    if (!escalated && Date.now() >= escalateAt) {
+      escalated = true;
+      await Promise.all(holders.map((p) => killProcessTree(p.pid, 'SIGKILL')));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 /** Everything {@link HostRuntime}'s handle construction needs beyond what `LaunchedBrowser` itself carries, kept out of the public handle shape rather than smuggled onto it. */
@@ -64,6 +91,9 @@ interface HandleMeta {
   headless: HeadlessMode;
   labels: Readonly<Record<string, string>>;
 }
+
+/** How much of a launching Chrome's stderr a failed launch quotes back. The tail is the part that names the reason. */
+const LAUNCH_STDERR_BYTES = 4096;
 
 /**
  * `@browserglass/runtime-host`'s `BrowserRuntime`. One instance per node
@@ -257,12 +287,39 @@ export class HostRuntime implements BrowserRuntime {
     // `stealth.ts`'s own doc comment).
     const stealthProfile = resolveRequiredStealthProfile(this.config, req.spec);
 
+    // Headful Chrome on Linux with no display prints "Missing X server or
+    // $DISPLAY" and exits, which would otherwise surface 45 seconds later
+    // as a CDP timeout that says nothing about the cause.
+    if (
+      req.spec.headless === 'off' &&
+      platform() === 'linux' &&
+      !process.env['DISPLAY'] &&
+      !process.env['WAYLAND_DISPLAY']
+    ) {
+      throw noDisplayError();
+    }
+
     const resolved = await timed('preflight', () =>
       resolveChromeBinary(req.spec.channel, this.config.binaries),
     );
 
     await timed('reconcile', async () => {
       const preExisting = await chromeProcsForDataDirAsync(req.profile.path, { maxAgeMs: 0 });
+      // Pids this runtime still supervises. A process parented to us that
+      // is NOT in here is one we spawned and then let go of (a `'detach'`
+      // terminate, or a launch that failed after spawn). On POSIX its ppid
+      // stays this process for as long as we live, so `classifyChromeProcess`
+      // calls it `ownedByUs`, and leaving it alone means the new Chrome
+      // finds the profile's SingletonLock held, forwards its arguments to
+      // the old process and exits, and this launch never sees a
+      // DevToolsActivePort. Windows hid this because Chrome's launch handoff
+      // leaves the browser main parented to a vanished pid, which classifies
+      // as `orphan` already.
+      const supervisedPids = new Set<number>();
+      for (const entry of this.live.values()) {
+        if (entry.handle.pid !== null) supervisedPids.add(entry.handle.pid);
+      }
+      const toReap: number[] = [];
       for (const proc of preExisting) {
         const classification = classifyChromeProcess(proc, {
           currentlyLaunchingPids: this.currentlyLaunchingPids,
@@ -273,9 +330,16 @@ export class HostRuntime implements BrowserRuntime {
             preExisting.map((p) => p.pid),
           );
         }
-        if (classification === 'orphan') {
-          await killProcessTree(proc.pid, 'SIGTERM');
+        if (
+          classification === 'orphan' ||
+          (classification === 'ownedByUs' && !supervisedPids.has(proc.pid))
+        ) {
+          toReap.push(proc.pid);
         }
+      }
+      if (toReap.length > 0) {
+        await Promise.all(toReap.map((pid) => killProcessTree(pid, 'SIGTERM')));
+        await waitForProfileRelease(req.profile.path, req.deadlineAt);
       }
       unlinkStaleDevToolsActivePort(req.profile.path);
 
@@ -325,12 +389,40 @@ export class HostRuntime implements BrowserRuntime {
         deniedStealthArgs.map((d) => d.arg),
       );
     }
+    // Chrome's stderr and exit status while the launch is still in doubt.
+    // Without them a launch that never produces DevToolsActivePort fails
+    // with nothing but a path and a deadline, when Chrome usually printed
+    // exactly why it gave up. The supervisor takes over the buffer once the
+    // launch succeeds.
+    const launchStderr = new StderrRingBuffer(LAUNCH_STDERR_BYTES);
+    let launchSettled = false;
+    let earlyExit: string | null = null;
+    const launchFailureDetail = (err: unknown): string => {
+      const parts = [err instanceof Error ? err.message : String(err)];
+      if (earlyExit) parts.push(`chrome ${earlyExit}`);
+      const tail = launchStderr.contents.trim();
+      parts.push(tail ? `chrome stderr: ${tail}` : 'chrome wrote nothing to stderr');
+      return parts.join('; ');
+    };
     const { realPid, child } = await timed('spawn', async () => {
-      const spawned = spawnDetachedChrome({ binaryPath: resolved.path, args, env });
+      const spawned = spawnDetachedChrome({
+        binaryPath: resolved.path,
+        args,
+        env,
+        onStderr: (chunk) => {
+          if (!launchSettled) launchStderr.push(chunk);
+        },
+      });
+      spawned.child.once('exit', (code, signal) => {
+        earlyExit = signal ? `exited on ${signal}` : `exited with code ${code}`;
+      });
       this.currentlyLaunchingPids.add(spawned.spawnPid);
       try {
         const pid = await resolveBrowserPid(req.profile.path, req.deadlineAt);
         return { realPid: pid, child: spawned.child };
+      } catch (err) {
+        await killProcessTree(spawned.spawnPid, 'SIGKILL');
+        throw new Error(launchFailureDetail(err), { cause: err });
       } finally {
         this.currentlyLaunchingPids.delete(spawned.spawnPid);
       }
@@ -346,8 +438,9 @@ export class HostRuntime implements BrowserRuntime {
       identity = discovered.identity;
     } catch (err) {
       await killProcessTree(realPid, 'SIGKILL');
-      throw cdpTimeoutError(err instanceof Error ? err.message : String(err));
+      throw cdpTimeoutError(launchFailureDetail(err));
     }
+    launchSettled = true;
 
     const handle = await timed('postLaunch', () =>
       this.buildHandle({
@@ -374,6 +467,7 @@ export class HostRuntime implements BrowserRuntime {
         labels: req.labels,
       },
       child,
+      launchStderr.contents,
     );
     return handle;
   }
@@ -504,12 +598,14 @@ export class HostRuntime implements BrowserRuntime {
     handle: LaunchedBrowser,
     meta: HandleMeta,
     child?: ChildProcess,
+    launchStderr?: string,
   ): void {
     const exitListeners = new Set<(info: ExitInfo) => void>();
     const supervisor = new BrowserSupervisor({
       instanceId,
       pid: handle.pid as number,
       ...(child !== undefined ? { child } : {}),
+      ...(launchStderr ? { launchStderr } : {}),
       statsIntervalMs:
         this.config.supervisor?.statsIntervalMs ?? DEFAULT_SUPERVISOR_CONFIG.statsIntervalMs,
       unhealthyProbes:

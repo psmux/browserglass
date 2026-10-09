@@ -34,6 +34,9 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
+    // Expands an 8.3 short TEMP on Windows so fixture plugins written under
+    // os.tmpdir() can be imported through vite-node. See the file's doc.
+    setupFiles: ['./test/support/long-tmpdir.ts'],
     server: {
       deps: {
         // `@browserglass/store-sqlite` is externalised alongside the addon

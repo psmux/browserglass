@@ -305,11 +305,14 @@ export function buildLaunchArgs(opts: BuildLaunchArgsOptions): BuiltLaunchArgs {
   const headless = headlessFlag(spec.headless);
   if (headless) args.push(headless);
 
+  // Headless needs this too: without it headless Chrome opens every window at
+  // its own 780x580 default and the spec viewport is silently ignored.
+  args.push(
+    `--window-size=${spec.window?.width ?? spec.viewport.width},${spec.window?.height ?? spec.viewport.height}`,
+  );
+
   if (spec.headless !== 'new') {
-    // Headful (real window or Xvfb-backed window) only.
-    args.push(
-      `--window-size=${spec.window?.width ?? spec.viewport.width},${spec.window?.height ?? spec.viewport.height}`,
-    );
+    // Window position only means something for a headful window.
     if (
       spec.window?.x !== null &&
       spec.window?.x !== undefined &&

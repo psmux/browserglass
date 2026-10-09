@@ -133,3 +133,8 @@ jobs:
       - run: pnpm run build
       - run: pnpm run build:plugins
       - run: pnpm -r --no-bail run test
+        if: matrix.os != 'ubuntu-latest'
+      # Linux runners have no display, and the headful conformance tests
+      # need one. xvfb-run provides a virtual X server for the whole run.
+      - run: xvfb-run --auto-servernum pnpm -r --no-bail run test
+        if: matrix.os == 'ubuntu-latest'
