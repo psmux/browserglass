@@ -580,3 +580,26 @@ def test_parse_selector_accepts_chained_xpath():
     segments = parse_selector("input#first >> xpath=ancestor::label[1]")
     assert segments[0].engine == "css"
     assert segments[1].engine == "xpath"
+
+
+@pytest.mark.asyncio
+async def test_click_partial_text_prefers_the_whole_text_match():
+    rt = FakeRuntime()
+    heading = make_match(index=0, ref="bg_0", tagName="h4", text="Welcome to the Secure Area. When you are done click logout below.", center={"x": 300, "y": 100})
+    link = make_match(index=1, ref="bg_1", tagName="i", text="Logout", center={"x": 80, "y": 200})
+    rt.wait_replies.append(wait_success([heading, link]))
+    engine = LocatorEngine(rt)
+    result = await engine.click("t1", "text=Logout")
+    assert rt.clicks[0][1:3] == (80, 200)
+    assert result.index == 1
+
+
+@pytest.mark.asyncio
+async def test_click_partial_text_keeps_document_order_without_a_whole_text_match():
+    rt = FakeRuntime()
+    a = make_match(index=0, ref="bg_0", text="Log out now", center={"x": 1, "y": 1})
+    b = make_match(index=1, ref="bg_1", text="Please log out", center={"x": 2, "y": 2})
+    rt.wait_replies.append(wait_success([a, b]))
+    engine = LocatorEngine(rt)
+    await engine.click("t1", "text=log out")
+    assert rt.clicks[0][1:3] == (1, 1)

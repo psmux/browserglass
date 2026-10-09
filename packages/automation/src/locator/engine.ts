@@ -81,6 +81,30 @@ export function isTransientNavigationError(err: unknown): boolean {
   );
 }
 
+/** The page script's own text normalisation for `text=`: whitespace collapsed, trimmed, lower case. */
+function normalizeForTextMatch(s: string): string {
+  return s.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * The normalised needle when `selector` ends in an unquoted (partial)
+ * `text=` segment, otherwise `null`. A quoted `text="..."` is already a
+ * whole text match and needs no preference.
+ */
+function partialTextNeedle(selector: string): string | null {
+  let segments: SelectorSegment[];
+  try {
+    segments = parseSelector(selector);
+  } catch {
+    return null;
+  }
+  const last = segments[segments.length - 1];
+  if (last === undefined || last.engine !== 'text') return null;
+  if (/^"[\s\S]*"$/.test(last.value)) return null;
+  const needle = normalizeForTextMatch(last.value);
+  return needle.length > 0 ? needle : null;
+}
+
 /** Whether a `role=` segment sits before the first `frame=` segment, i.e. one this hop resolves itself. */
 function selectorHasLiveRole(segments: SelectorSegment[]): boolean {
   for (const seg of segments) {
@@ -1080,9 +1104,27 @@ export class LocatorEngine {
    * With an explicit index, exactly that one, whatever state it is in, so
    * that the failure report is about the element the caller meant rather
    * than about a different one the verb wandered to.
+   *
+   * One refinement for a partial `text=` selector (unquoted, so substring
+   * and case insensitive): an actionable match whose whole text equals the
+   * needle wins over one that only contains it. `text=Logout` on a page
+   * whose heading says "click logout below" ahead of the Logout link used
+   * to act on the heading, which was first in document order. The heading
+   * is still in the result; it just is not the one acted on.
    */
-  private pick(result: ResolveResult, index: number | undefined): LocatorMatch | undefined {
+  private pick(
+    result: ResolveResult,
+    index: number | undefined,
+    selector?: string,
+  ): LocatorMatch | undefined {
     if (index !== undefined) return result.matches[index];
+    const needle = selector !== undefined ? partialTextNeedle(selector) : null;
+    if (needle !== null) {
+      const whole = result.matches.find(
+        (m) => isActionable(m) && normalizeForTextMatch(m.text ?? '') === needle,
+      );
+      if (whole !== undefined) return whole;
+    }
     return result.matches.find(isActionable);
   }
 
@@ -1110,7 +1152,7 @@ export class LocatorEngine {
         { verb, selector, index, matchCount: result.total, engine: result.engine, url: result.url },
       );
     }
-    const chosen = this.pick(result, index);
+    const chosen = this.pick(result, index, selector);
     if (chosen === undefined || !isActionable(chosen)) {
       throw actionabilityError(
         verb,

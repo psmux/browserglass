@@ -81,6 +81,15 @@ chained segment. There is no strict mode: a selector matching three
 elements is a fact about the page, not an error, and the acting verbs say
 which one they chose and out of how many.
 
+`text=` needs care. `text=Logout` is a substring match and ignores case,
+so it also matches a heading that says "click logout below". Quote it,
+`text="Logout"`, to match only elements whose whole text is "Logout"
+(whitespace collapsed, case still ignored). When an unquoted `text=`
+matches several elements, the acting verbs act on the first actionable one
+whose whole text equals the needle, and fall back to the first actionable
+match in document order only when none does. `resolve()` still returns
+every match, in document order.
+
 `role=button` or `role=button[name="Submit"]` matches the real accessible
 role and name, computed by Chrome's own accessibility engine
 (`Accessibility.queryAXTree`), not a `role` attribute lookalike: a

@@ -74,6 +74,26 @@ _TRANSIENT_NAVIGATION = re.compile(
 )
 
 
+def _normalize_for_text_match(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _partial_text_needle(selector: str) -> Optional[str]:
+    """The normalised needle when ``selector`` ends in an unquoted
+    (partial) ``text=`` segment, otherwise ``None``."""
+    try:
+        segments = parse_selector(selector)
+    except AutomationError:
+        return None
+    if not segments or segments[-1].engine != "text":
+        return None
+    value = segments[-1].value
+    if re.match(r'^"[\s\S]*"$', value):
+        return None
+    needle = _normalize_for_text_match(value)
+    return needle or None
+
+
 def is_transient_navigation_error(err: BaseException) -> bool:
     """Whether ``err`` is the page changing under a query (a navigation
     replaced the document, or the execution context went away) rather than
@@ -555,9 +575,19 @@ class LocatorEngine:
     # The choosing rule, shared by every acting verb
     # ------------------------------------------------------------------
 
-    def _pick(self, result: ResolveResult, index: Optional[int]) -> Optional[LocatorMatch]:
+    def _pick(self, result: ResolveResult, index: Optional[int], selector: Optional[str] = None) -> Optional[LocatorMatch]:
         if index is not None:
             return result.matches[index] if 0 <= index < len(result.matches) else None
+        # A partial ``text=`` selector prefers an actionable match whose whole
+        # text equals the needle over one that only contains it, so
+        # ``text=Logout`` acts on the Logout link rather than on a heading
+        # earlier in the page that mentions logging out. See engine.ts's
+        # ``pick``.
+        needle = _partial_text_needle(selector) if selector is not None else None
+        if needle is not None:
+            for m in result.matches:
+                if _is_actionable(m) and _normalize_for_text_match(m.text or "") == needle:
+                    return m
         for m in result.matches:
             if _is_actionable(m):
                 return m
@@ -573,7 +603,7 @@ class LocatorEngine:
                 f"{verb}('{selector}'): index {index} was asked for and {what}. The page is at {result.url}.",
                 {"verb": verb, "selector": selector, "index": index, "matchCount": result.total, "engine": result.engine, "url": result.url},
             )
-        chosen = self._pick(result, index)
+        chosen = self._pick(result, index, selector)
         if chosen is None or not _is_actionable(chosen):
             raise actionability_error(verb, selector, result, chosen if chosen is not None else self._best(result, index), elapsed_ms)
         return chosen

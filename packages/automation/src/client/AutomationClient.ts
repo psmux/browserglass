@@ -2315,7 +2315,8 @@ export class AutomationClient {
    *  * `css=` is the default because it is what real call sites are:
    *    attribute selectors, overwhelmingly.
    *  * `text=` matches on normalised `textContent` (substring and
-   *    case-insensitive; `text="exact phrase"` for an exact match) and
+   *    case-insensitive; `text="exact phrase"` matches the whole text,
+   *    still ignoring case) and
    *    returns only the innermost matching elements, since every ancestor
    *    contains the text too. It reads `textContent` rather than
    *    `innerText` because `innerText` forces layout for every element in

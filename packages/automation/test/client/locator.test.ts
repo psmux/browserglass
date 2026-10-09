@@ -929,6 +929,47 @@ describe('click', () => {
     });
   });
 
+  it('acts on the whole-text match for a partial text= selector, not an earlier container that mentions it', async () => {
+    const heading = wireMatch({
+      index: 0,
+      ref: 'bgtest_0',
+      tagName: 'h4',
+      text: 'Welcome to the Secure Area. When you are done click logout below.',
+      center: { x: 300, y: 100 },
+    });
+    const link = wireMatch({
+      index: 1,
+      ref: 'bgtest_1',
+      tagName: 'i',
+      text: 'Logout',
+      center: { x: 80, y: 200 },
+    });
+    const { engine, rt } = engineWith();
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([heading, link]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+    const r = await engine.click('t1', 'text=Logout');
+    expect(rt.clicks).toEqual([{ x: 80, y: 200, opts: {} }]);
+    expect(r.index).toBe(1);
+    expect(r.matchCount).toBe(2);
+  });
+
+  it('keeps document order for a partial text= selector when no match is the whole text', async () => {
+    const a = wireMatch({ index: 0, ref: 'bgtest_0', text: 'Log out now', center: { x: 1, y: 1 } });
+    const b = wireMatch({
+      index: 1,
+      ref: 'bgtest_1',
+      text: 'Please log out',
+      center: { x: 2, y: 2 },
+    });
+    const { engine, rt } = engineWith();
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([a, b]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+    await engine.click('t1', 'text=log out');
+    expect(rt.clicks).toEqual([{ x: 1, y: 1, opts: {} }]);
+  });
+
   /**
    * The scroll has to happen inside the same evaluation that measures.
    * Measuring after a scroll performed in a previous round trip is
