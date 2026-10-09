@@ -209,6 +209,14 @@ export async function healProfile(profilePath: string, opts?: HealOptions): Prom
   prefs['credentials_enable_service'] = false;
   section('password_manager')['saving_enabled'] = false;
   section('autofill')['profile_enabled'] = false;
+  // 6. The leaked password warning. After a login with a password that is
+  //    on a breach list (demo sites publish exactly those), Chrome can open
+  //    a "change your password" dialog. Headless has nobody to close it,
+  //    and while it is up every mouse and key event to the page is dropped,
+  //    so clicks report success and do nothing.
+  if (profileSection['password_manager_leak_detection'] !== false)
+    fixed.push('password_manager_leak_detection');
+  profileSection['password_manager_leak_detection'] = false;
 
   // Written through a temporary file and renamed, so a reader never sees
   // half a Preferences. `corruption-probe.ts`'s `preferences_nonzero_length`

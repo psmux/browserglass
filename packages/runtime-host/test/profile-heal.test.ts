@@ -78,7 +78,12 @@ describe('healProfile, the crash marker', () => {
 
   it('reports nothing fixed on a profile that closed cleanly, and still leaves it clean', async () => {
     const udd = crashedProfile({
-      profile: { exit_type: 'Normal', exited_cleanly: true, name: 'Person 1' },
+      profile: {
+        exit_type: 'Normal',
+        exited_cleanly: true,
+        name: 'Person 1',
+        password_manager_leak_detection: false,
+      },
       session: { restore_on_startup: 5 },
       credentials_enable_service: false,
     });
@@ -109,6 +114,15 @@ describe('healProfile, the password and autofill bubbles', () => {
     expect(prefs['credentials_enable_service']).toBe(false);
     expect((prefs['password_manager'] as Record<string, unknown>)['saving_enabled']).toBe(false);
     expect((prefs['autofill'] as Record<string, unknown>)['profile_enabled']).toBe(false);
+  });
+
+  it('turns off the leaked password warning, which blocks all input in headless', async () => {
+    const udd = crashedProfile();
+    await healProfile(udd);
+    const prefs = prefsOf(udd);
+    expect((prefs['profile'] as Record<string, unknown>)['password_manager_leak_detection']).toBe(
+      false,
+    );
   });
 });
 
