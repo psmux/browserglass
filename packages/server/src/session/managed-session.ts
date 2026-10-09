@@ -1066,6 +1066,20 @@ export class ManagedSession {
     return this.connections.size;
   }
 
+  /**
+   * Viewers whose socket is still open, the count viewer aware release
+   * reads. `viewerCount` keeps a connection until its socket's `close`
+   * event, which `ws` emits only once the close handshake and the TCP
+   * teardown both finish. A socket whose peer has already sent its close
+   * frame reports `isOpen()` false straight away, and that peer is
+   * leaving, so it must not hold a browser open against its own release.
+   */
+  get openViewerCount(): number {
+    let open = 0;
+    for (const sink of this.connections.values()) if (sink.isOpen()) open += 1;
+    return open;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;

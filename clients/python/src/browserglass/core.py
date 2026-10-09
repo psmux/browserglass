@@ -130,6 +130,11 @@ class AutomationCore:
         self.emitter = Emitter()
 
         self.yield_by_target: Dict[str, ControlYieldEvent] = {}
+        # Targets on which, since this client's current stand-down began, a
+        # viewer other than this one has held the lease. See
+        # ``AutomationClient.wait_for_resume`` for why the lease table alone
+        # cannot answer that. Cleared when the stand-down ends.
+        self.other_holder_seen: Set[str] = set()
         self.yield_cbs: Set[Callable[[ControlYieldEvent], None]] = set()
 
         self._in_flight_actions: Set[InFlightAction] = set()
@@ -176,6 +181,9 @@ class AutomationCore:
             self.lease_state_by_target = {}
             for l in msg.get("leases", []):
                 self.lease_state_by_target[l["targetId"]] = l
+            for yielded in list(self.yield_by_target):
+                if self.someone_else_holds(yielded):
+                    self.other_holder_seen.add(yielded)
         elif t == "control.preempt.request":
             target_id = msg["targetId"]
             by_kind = self._requester_kind(msg["byViewerId"])
@@ -332,7 +340,15 @@ class AutomationCore:
         self._complete_stand_down(ev)
 
     def _enter_stand_down(self, ev: ControlYieldEvent) -> None:
+        # A fresh stand-down starts a fresh "has anybody else had it"
+        # record; a second notice for one already in force keeps it.
+        if ev.target_id not in self.yield_by_target:
+            self.other_holder_seen.discard(ev.target_id)
         self.yield_by_target[ev.target_id] = ev
+        # A takeover is somebody else taking the lease by definition, even
+        # before the broadcast showing them arrives.
+        if self.someone_else_holds(ev.target_id) or (ev.phase == "taken" and ev.reason != "voluntary"):
+            self.other_holder_seen.add(ev.target_id)
         lease = self.leases.get(ev.target_id)
         if lease is not None:
             lease._suspend_auto_renew()
@@ -354,6 +370,7 @@ class AutomationCore:
     def _end_stand_down(self, target_id: str) -> None:
         if self.yield_by_target.pop(target_id, None) is None:
             return
+        self.other_holder_seen.discard(target_id)
         self.requeue_blocked_until.pop(target_id, None)
         lease = self.leases.get(target_id)
         if lease is not None:

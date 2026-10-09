@@ -144,6 +144,78 @@ async def test_yield_control_is_voluntary_and_sets_no_backoff():
         await client.close()
 
 
+def _control_state(holder_viewer_id, label=None):
+    return {
+        "t": "control.state",
+        "leases": [
+            {
+                "targetId": "t1",
+                "holderViewerId": holder_viewer_id,
+                "holderLabel": label,
+                "mode": "exclusive",
+                "holders": [] if holder_viewer_id is None else [{"viewerId": holder_viewer_id, "label": label}],
+                "queue": [],
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_wait_for_resume_after_yield_ignores_a_broadcast_that_still_names_this_client():
+    client, socket = await connect_client({"control.request": control_granted_handler()})
+    try:
+        await client.acquire_control()
+        await client.yield_control("need a person")
+        waiting = asyncio.ensure_future(client.wait_for_resume())
+
+        # The broadcast crossing the release still names the agent, the next
+        # names nobody. Neither is a handover.
+        await socket.push(_control_state("v_test", "agent"))
+        await socket.push(_control_state(None))
+        await asyncio.sleep(0.05)
+        assert not waiting.done()
+
+        # A person takes it, and is still working.
+        await socket.push(_control_state("v_human", "Alice"))
+        await asyncio.sleep(0.05)
+        assert not waiting.done()
+
+        # They let go.
+        await socket.push(_control_state(None))
+        await asyncio.wait_for(waiting, timeout=1)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_resume_after_yield_resolves_when_the_person_came_and_went_first():
+    client, socket = await connect_client({"control.request": control_granted_handler()})
+    try:
+        await client.acquire_control()
+        await client.yield_control("need a person")
+        await socket.push(_control_state("v_human", "Alice"))
+        await socket.push(_control_state(None))
+        await asyncio.sleep(0.05)
+        await client.wait_for_resume(timeout_ms=1000)
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_resume_after_yield_times_out_when_nobody_takes_control():
+    client, socket = await connect_client({"control.request": control_granted_handler()})
+    try:
+        await client.acquire_control()
+        await client.yield_control("need a person")
+        await socket.push(_control_state(None))
+        with pytest.raises(AutomationError) as excinfo:
+            await client.wait_for_resume(timeout_ms=200)
+        assert excinfo.value.code == "TIMEOUT"
+        assert "nobody else took control" in excinfo.value.message
+    finally:
+        await client.close()
+
+
 def _uncorrelated_renew_handler(ttl_ms: float = 90000):
     """Answers ``control.renew`` the way the real gateway does: a fresh
     ``control.granted`` for the lease with no ``re`` on it."""

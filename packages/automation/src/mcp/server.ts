@@ -952,7 +952,7 @@ export const AUTOMATION_MCP_TOOLS: readonly Tool[] = Object.freeze([
   {
     name: 'bg_swarm_close',
     description:
-      "Closes every connection a swarm holds and forgets it. Does not release anything this server's own acquire function reserved elsewhere, such as a pool slot or a profile lease: that is the deployment's own concern. Call this when done with a swarm. An agent that forgets to leaks running browsers only until this MCP server itself shuts down, at which point every outstanding swarm is closed automatically.",
+      'Closes every connection a swarm holds, ends its browsers when this server was given a way to (bgls mcp is), and forgets it. Call this when done with a swarm. An agent that forgets to leaks running browsers only until this MCP server itself shuts down, at which point every outstanding swarm is closed automatically.',
     inputSchema: {
       type: 'object',
       properties: { swarmId: { type: 'string' } },
@@ -1020,6 +1020,18 @@ export interface AutomationMcpServerOptions {
      * is set. See {@link SwarmAcquireContext}.
      */
     acquire(index: number, ctx: SwarmAcquireContext): Promise<SwarmAcquireResult>;
+    /**
+     * Gives back an instance `acquire()` opened, once this server is done
+     * with it: for the members `bg_swarm_shrink` drops, for every member of
+     * a swarm `bg_swarm_close` closes, and for every member of every swarm
+     * still open when this server's connection closes. Optional: without
+     * it those members' sockets are closed and their browsers are left to
+     * whatever the deployment does with an instance nobody is attached to,
+     * which for a plain `bgls serve` is to keep it running. Errors are
+     * swallowed; a release that fails leaves the instance to the gateway's
+     * own reaper.
+     */
+    release?(instanceId: string): Promise<void>;
     /** Passed through to every member's `AutomationClient.connect()`; the same test-double injection point `BrowserSwarmOptions.transport` exposes. */
     transport?: { WebSocketImpl?: WebSocketConstructorLike };
   };
@@ -1040,6 +1052,7 @@ interface McpServerState {
     | ((index: number, ctx: SwarmAcquireContext) => Promise<SwarmAcquireResult>)
     | undefined;
   readonly swarmTransport: { WebSocketImpl?: WebSocketConstructorLike } | undefined;
+  readonly swarmRelease: ((instanceId: string) => Promise<void>) | undefined;
   readonly swarms: Map<string, BrowserSwarm>;
   nextSwarmId: number;
   /** Owner keys (`'bound'` or `'<swarmId>:<memberIndex>'`) that already have `client.on('console'|'pageerror'|'network', ...)` listeners attached, so `bg_diagnostics_subscribe` called twice on the same connection does not double up delivery into the buffers below. */
@@ -1062,6 +1075,7 @@ function createMcpState(options: AutomationMcpServerOptions): McpServerState {
     client: options.client,
     swarmAcquire: options.swarm?.acquire,
     swarmTransport: options.swarm?.transport,
+    swarmRelease: options.swarm?.release,
     swarms: new Map(),
     nextSwarmId: 1,
     diagListenersAttached: new Set(),
@@ -1078,6 +1092,16 @@ function requireString(args: Record<string, unknown>, key: string): string {
   const v = args[key];
   if (typeof v !== 'string') throw new Error(`'${key}' must be a string`);
   return v;
+}
+
+/** Hands every instance in `instanceIds` to the configured `swarm.release`, if any, and resolves once each attempt has settled. Never rejects. */
+async function releaseSwarmInstances(
+  state: McpServerState,
+  instanceIds: readonly string[],
+): Promise<void> {
+  const release = state.swarmRelease;
+  if (release === undefined) return;
+  await Promise.allSettled(instanceIds.map((id) => release(id)));
 }
 
 function getSwarm(state: McpServerState, swarmId: string): BrowserSwarm {
@@ -2696,7 +2720,13 @@ async function callSwarmShrink(
     const swarm = getSwarm(state, swarmId);
     const n = args['n'];
     if (typeof n !== 'number') throw new Error("bg_swarm_shrink needs 'n' as a number");
+    const before = swarm.members.map((m) => m.instanceId);
     await swarm.shrink(n);
+    const kept = new Set(swarm.members.map((m) => m.instanceId));
+    await releaseSwarmInstances(
+      state,
+      before.filter((id) => !kept.has(id)),
+    );
     return formatToolResult(
       `Shrank swarm ${swarmId} by ${n}; ${swarm.members.length} member(s) remain.`,
       {
@@ -2721,8 +2751,10 @@ async function callSwarmClose(
   try {
     const swarmId = requireString(args, 'swarmId');
     const swarm = getSwarm(state, swarmId);
+    const instanceIds = swarm.members.map((m) => m.instanceId);
     await swarm.close();
     state.swarms.delete(swarmId);
+    await releaseSwarmInstances(state, instanceIds);
     // Forget this swarm's own diagnostic buffers and listener registrations
     // too, or they sit around forever keyed under a swarmId bg_swarm_list
     // will never surface again.
@@ -3004,10 +3036,16 @@ export function createAutomationMcpServer(options: AutomationMcpServerOptions): 
     const swarms = [...state.swarms.values()];
     state.swarms.clear();
     for (const swarm of swarms) {
+      const instanceIds = swarm.members.map((m) => m.instanceId);
       // BrowserSwarm.close() already swallows per-member socket errors
       // (swarm.ts's own closeMembers()), so this needs no retry of its
       // own; onclose itself is synchronous, so the close is fire-and-forget.
-      swarm.close().catch(() => {});
+      // So is the release: a host that must wait for it (a CLI about to
+      // exit) tracks its own `swarm.release` calls.
+      swarm
+        .close()
+        .catch(() => {})
+        .then(() => releaseSwarmInstances(state, instanceIds));
     }
   };
 

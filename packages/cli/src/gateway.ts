@@ -16,6 +16,7 @@ import {
   createServer,
 } from 'node:http';
 import { type Server as HttpsServer, createServer as createHttpsServer } from 'node:https';
+import type { Socket } from 'node:net';
 import { dirname, isAbsolute, join } from 'node:path';
 import {
   type BrowserRuntime,
@@ -497,6 +498,13 @@ async function buildEmbeddedGatewayInner(opts: EmbeddedGatewayOptions): Promise<
         )
       : createServer(requestHandler);
   bg.attach(httpServer);
+  // Every socket the server accepted, so `close()` can end whatever is
+  // still open once `bg.stop()` has had its chance to close it politely.
+  const openSockets = new Set<Socket>();
+  httpServer.on('connection', (socket: Socket) => {
+    openSockets.add(socket);
+    socket.once('close', () => openSockets.delete(socket));
+  });
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
@@ -536,7 +544,15 @@ async function buildEmbeddedGatewayInner(opts: EmbeddedGatewayOptions): Promise<
     session,
     startReport,
     async close(): Promise<void> {
-      await new Promise<void>((resolve) => {
+      // Stop accepting first, but do not wait for the server to finish
+      // closing before stopping `bg`. `httpServer.close()` only calls back
+      // once every connection has ended, and an upgraded socket (a viewer,
+      // an MCP client's automation socket, a CDP proxy client) never ends
+      // on its own. `bg.stop()` is the thing that closes those sockets, so
+      // awaiting the server first meant a gateway with one client still
+      // connected never reached `bg.stop()` at all. Whoever then killed
+      // the hung process left every browser it had launched running.
+      const serverClosed = new Promise<void>((resolve) => {
         httpServer.close(() => resolve());
       });
       try {
@@ -551,6 +567,11 @@ async function buildEmbeddedGatewayInner(opts: EmbeddedGatewayOptions): Promise<
         // Best effort: dispose() releasing runtime-wide resources is not
         // worth failing an already-in-progress shutdown over.
       }
+      // Anything `bg.stop()` did not close (a socket mid handshake, an idle
+      // keep alive connection) is ended here, so the server's own close
+      // callback can fire and the caller's `await close()` returns.
+      for (const socket of openSockets) socket.destroy();
+      await serverClosed;
     },
   };
 }

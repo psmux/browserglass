@@ -650,7 +650,10 @@ export class AutomationClient {
 
   /**
    * Waits until this client would be allowed to ask for control of
-   * {@link targetId} again, then resolves. Does NOT acquire anything: the
+   * {@link targetId} again, then resolves. While this client is stood down
+   * on the target (after {@link yieldControl}, or after somebody took the
+   * browser over), "allowed again" means somebody else has had control
+   * since the stand-down began and has since let it go. Does NOT acquire anything: the
    * caller still has to call `acquireControl()`, and that call is what
    * ends the stand-down.
    *
@@ -669,6 +672,24 @@ export class AutomationClient {
    * clock is the mistake that produces the exact failure this API
    * exists to remove, an agent queueing up behind a person who is still
    * mid-task and taking the pointer back the moment their lease lapses.
+   *
+   * The handover has to have actually happened. Straight after
+   * `yieldControl()` the lease table can still name this client, and a
+   * moment later it names nobody, so a check for "nobody else holds it"
+   * passes before any person has had the browser at all. While a
+   * stand-down is in force this therefore waits until a different viewer
+   * has held control at some point since it began, and only then for
+   * that viewer to let go. If nobody ever takes control it keeps waiting,
+   * until `timeoutMs` (default: forever), and then throws `TIMEOUT`; it
+   * never decides on its own that nobody is coming. With no stand-down in
+   * force (this client never yielded, or has already re-acquired) it
+   * waits only for the backoff and for nobody else to hold the target.
+   *
+   * ```ts
+   * await client.yieldControl('need a person to solve the captcha');
+   * await client.waitForResume({ timeoutMs: 10 * 60_000 });
+   * await client.acquireControl();
+   * ```
    */
   async waitForResume(opts?: WaitForResumeOptions): Promise<void> {
     const targetId = this._targetId;
@@ -693,16 +714,31 @@ export class AutomationClient {
     // table broadcast on every lease change, so waiting for the next one
     // and re-checking is exactly "wake me when something about control
     // changed", with no polling interval to tune.
-    while (this.core.someoneElseHolds(targetId)) {
+    const awaitingHandover = (): boolean =>
+      this.core.yieldFor(targetId) !== undefined && !this.core.otherHolderSeen.has(targetId);
+    while (awaitingHandover() || this.core.someoneElseHolds(targetId)) {
       const left = remaining();
       if (left <= 0) {
+        if (awaitingHandover()) {
+          throw new AutomationError(
+            'TIMEOUT',
+            `waitForResume() timed out after ${timeoutMs}ms: nobody else took control of ${targetId} after this client stood down`,
+          );
+        }
         const holder = this.core.leaseStateByTarget.get(targetId)?.holderLabel ?? 'someone else';
         throw new AutomationError(
           'TIMEOUT',
           `waitForResume() timed out after ${timeoutMs}ms: ${holder} still holds control of ${targetId}`,
         );
       }
-      await this.core.awaitMessage((m) => m.t === 'control.state', left);
+      try {
+        await this.core.awaitMessage((m) => m.t === 'control.state', left);
+      } catch (err) {
+        // Out of time with no new broadcast: go round once more so the
+        // error names what was still missing.
+        if (err instanceof AutomationError && err.code === 'TIMEOUT' && remaining() <= 0) continue;
+        throw err;
+      }
     }
   }
 

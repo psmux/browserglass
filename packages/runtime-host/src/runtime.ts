@@ -720,11 +720,25 @@ export class HostRuntime implements BrowserRuntime {
   async dispose(): Promise<void> {
     if (this.disposed) return;
     this.disposed = true;
-    const kills: Promise<void>[] = [];
+    const kills: Promise<unknown>[] = [];
     for (const [instanceId, entry] of this.live) {
       entry.supervisor.stop();
       if (this.config.killOnShutdown) {
-        kills.push(killProcessTree(entry.handle.pid as number, 'SIGTERM'));
+        // The full force ladder, not a bare kill of the remembered pid:
+        // Chrome on Windows can hand the profile over to a process outside
+        // the tree `taskkill /T` walks (see `terminate.ts`), and only the
+        // ladder's rescan by profile directory finds and ends that one.
+        kills.push(
+          terminateBrowser({
+            pid: entry.handle.pid as number,
+            cdpWsUrl: entry.handle.cdpWsUrl,
+            profilePath: entry.handle.profilePath,
+            mode: 'force',
+            cdpCloseTimeoutMs: 0,
+            gracePeriodMs: 0,
+            stopSupervision: () => undefined,
+          }).catch(() => killProcessTree(entry.handle.pid as number, 'SIGKILL')),
+        );
         this.stateStore.remove(instanceId);
       }
     }

@@ -303,7 +303,7 @@ export interface YieldPolicy {
 
 /** Options for {@link AutomationClient.waitForResume}. */
 export interface WaitForResumeOptions {
-  /** Default `Infinity`, i.e. wait as long as the person takes. A finite value throws `TIMEOUT` rather than resolving early: resolving early would be the SDK telling an agent it may drive while a person still is. */
+  /** Default `Infinity`, i.e. wait as long as the person takes, including however long it takes for one to turn up after a yield. A finite value throws `TIMEOUT` rather than resolving early: resolving early would be the SDK telling an agent it may drive while a person still is. */
   timeoutMs?: number;
 }
 
