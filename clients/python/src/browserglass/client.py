@@ -659,6 +659,22 @@ class AutomationClient:
         Waits for BOTH: the backoff window to elapse, AND the target to
         stop being held by somebody else. Nothing in this SDK ever
         re-acquires control on its own, on a timer or otherwise.
+
+        The handover has to have actually happened. Straight after
+        :meth:`yield_control` the lease table can still name this client,
+        and a moment later it names nobody, so "nobody else holds it" is
+        true before any person has had the browser. While a stand-down is
+        in force this therefore waits until a different viewer has held
+        control at some point since it began, and only then for that viewer
+        to let go. If nobody ever takes control it keeps waiting until
+        ``timeout_ms`` (default: forever) and then raises ``TIMEOUT``; it
+        never decides on its own that nobody is coming. With no stand-down
+        in force it waits only for the backoff and for nobody else to hold
+        the target::
+
+            await client.yield_control("need a person to solve the captcha")
+            await client.wait_for_resume(timeout_ms=10 * 60_000)
+            await client.acquire_control()
         """
         target_id = self._target_id
         deadline_ms = math.inf if timeout_ms is None else timeout_ms
@@ -676,13 +692,27 @@ class AutomationClient:
                 )
             await _sleep_ms(wait_ms)
 
-        while self._core.someone_else_holds(target_id):
+        def awaiting_handover() -> bool:
+            return self._core.yield_for(target_id) is not None and target_id not in self._core.other_holder_seen
+
+        while awaiting_handover() or self._core.someone_else_holds(target_id):
             left = remaining()
             if left <= 0:
+                if awaiting_handover():
+                    raise AutomationError(
+                        "TIMEOUT", f"wait_for_resume() timed out after {timeout_ms}ms: nobody else took control of {target_id} after this client stood down"
+                    )
                 state = self._core.lease_state_by_target.get(target_id)
                 holder = state.get("holderLabel") if state else None
                 raise AutomationError("TIMEOUT", f"wait_for_resume() timed out after {timeout_ms}ms: {holder or 'someone else'} still holds control of {target_id}")
-            await self._core.await_message(lambda m: m.get("t") == "control.state", left)
+            try:
+                await self._core.await_message(lambda m: m.get("t") == "control.state", left)
+            except AutomationError as err:
+                # Out of time with no new broadcast: go round once more so
+                # the error names what was still missing.
+                if err.code == "TIMEOUT" and remaining() <= 0:
+                    continue
+                raise
 
     async def close(self) -> None:
         """Closes the connection. Best-effort releases every lease this

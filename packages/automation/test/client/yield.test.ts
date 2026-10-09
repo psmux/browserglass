@@ -695,5 +695,67 @@ describe('standing down when control is taken', () => {
 
       client.close();
     });
+
+    const SELF = { viewerId: 'vwr_00000000000000000000000001', label: 'agent' };
+    const HUMAN = { viewerId: 'vwr_00000000000000000000000099', label: 'Alice' };
+
+    it('waitForResume() after yieldControl() does not return on a broadcast that still names this client', async () => {
+      const { client, gateway } = await connectHolding();
+      await client.yieldControl('need a person');
+
+      let resolved = false;
+      const waiting = client.waitForResume().then(() => {
+        resolved = true;
+      });
+
+      // The broadcast that crosses the release on the wire still names the
+      // agent, and the next one names nobody. Neither is a handover.
+      gateway.sendControlState(client.targetId, SELF);
+      await tick();
+      gateway.sendControlState(client.targetId, null);
+      await tick(60000);
+      expect(resolved).toBe(false);
+
+      // A person takes it: still not done, they are working.
+      gateway.sendControlState(client.targetId, HUMAN);
+      await tick();
+      expect(resolved).toBe(false);
+
+      // They let go: now the agent may ask again.
+      gateway.sendControlState(client.targetId, null);
+      await tick();
+      await waiting;
+      expect(resolved).toBe(true);
+
+      client.close();
+    });
+
+    it('waitForResume() after yieldControl() still resolves when the person came and went before it was called', async () => {
+      const { client, gateway } = await connectHolding();
+      await client.yieldControl('need a person');
+
+      gateway.sendControlState(client.targetId, HUMAN);
+      gateway.sendControlState(client.targetId, null);
+
+      await client.waitForResume({ timeoutMs: 1000 });
+
+      client.close();
+    });
+
+    it('waitForResume() after yieldControl() throws TIMEOUT when nobody ever takes control', async () => {
+      const { client, gateway } = await connectHolding();
+      await client.yieldControl('need a person');
+      gateway.sendControlState(client.targetId, null);
+
+      const waiting = client.waitForResume({ timeoutMs: 5000 });
+      const assertion = expect(waiting).rejects.toMatchObject({
+        code: 'TIMEOUT',
+        message: expect.stringContaining('nobody else took control'),
+      });
+      await tick(6000);
+      await assertion;
+
+      client.close();
+    });
   });
 });

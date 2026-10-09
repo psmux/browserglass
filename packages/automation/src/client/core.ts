@@ -88,6 +88,16 @@ export class AutomationCore {
    * still say who took over after the handle is gone.
    */
   readonly yieldByTarget = new Map<string, ControlYieldEvent>();
+  /**
+   * Targets on which, since this client's current stand-down began, a
+   * viewer other than this one has held the lease. `waitForResume()` needs
+   * this and cannot read it off the lease table alone: right after a
+   * yield the table can still name this client as the holder (the release
+   * and the broadcast that reflects it cross on the wire), and a moment
+   * later it names nobody, so "nobody else holds it" is true before anyone
+   * else has had the browser at all. Cleared when the stand-down ends.
+   */
+  readonly otherHolderSeen = new Set<string>();
   /** Subscribers to {@link AutomationClient.onControlYield}, connection-wide (not per lease, and not per target). */
   readonly yieldCbs = new Set<(ev: ControlYieldEvent) => void>();
   /**
@@ -174,6 +184,9 @@ export class AutomationCore {
         this.leaseStateByTarget.clear();
         const leases = msg['leases'] as LeaseState[];
         for (const l of leases) this.leaseStateByTarget.set(l.targetId, l);
+        for (const targetId of this.yieldByTarget.keys()) {
+          if (this.someoneElseHolds(targetId)) this.otherHolderSeen.add(targetId);
+        }
         break;
       }
       case 'control.preempt.request': {
@@ -555,7 +568,16 @@ export class AutomationCore {
    * have the gate shut before either callback surface runs.
    */
   private enterStandDown(ev: ControlYieldEvent): void {
+    // A fresh stand-down starts a fresh "has anybody else had it" record;
+    // a second notice for one already in force (requested, then taken)
+    // keeps what the first one saw.
+    if (!this.yieldByTarget.has(ev.targetId)) this.otherHolderSeen.delete(ev.targetId);
     this.yieldByTarget.set(ev.targetId, ev);
+    // A takeover is somebody else taking the lease by definition, even if
+    // the broadcast showing them has not arrived yet.
+    if (this.someoneElseHolds(ev.targetId) || (ev.phase === 'taken' && ev.reason !== 'voluntary')) {
+      this.otherHolderSeen.add(ev.targetId);
+    }
     this.leases.get(ev.targetId)?.suspendAutoRenew();
     if (ev.resumeNotBefore !== null) {
       // Never backwards: a second notice for the same target must not be
@@ -595,6 +617,7 @@ export class AutomationCore {
   /** Preemption withdrawn (`control.preempt.cancelled`): the requester went away and this client may drive again on its existing lease. */
   endStandDown(targetId: string): void {
     if (!this.yieldByTarget.delete(targetId)) return;
+    this.otherHolderSeen.delete(targetId);
     this.requeueBlockedUntil.delete(targetId);
     this.leases.get(targetId)?.resumeAutoRenew();
   }
