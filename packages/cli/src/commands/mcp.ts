@@ -153,6 +153,29 @@ export const mcpCommand = defineCommand({
       viewport: args['viewport'] as string | undefined,
     };
 
+    // Every instance this process opened, and so must end before it exits:
+    // the startup instance (never one named with --instance-id, which
+    // somebody else owns) and every swarm member `acquire` below mints.
+    const owned = new Set<string>();
+    const releasing = new Set<Promise<void>>();
+    const release = (instanceId: string): Promise<void> => {
+      if (!owned.delete(instanceId)) return Promise.resolve();
+      // A plain release, not `force`: if a person is watching one of these
+      // browsers the gateway leaves it running for them and says
+      // `detached`, which is the right answer for a browser in use.
+      const done = restCall(connection, 'DELETE', `/v1/instances/${instanceId}`).then(
+        () => undefined,
+        (err: unknown) => {
+          logStderr(
+            `bgls mcp: releasing instance ${instanceId} failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        },
+      );
+      releasing.add(done);
+      void done.finally(() => releasing.delete(done));
+      return done;
+    };
+
     const explicitInstanceId = args['instance-id'] as string | undefined;
     let boundInstanceId: string;
     if (explicitInstanceId !== undefined) {
@@ -173,9 +196,11 @@ export const mcpCommand = defineCommand({
           '/v1/instances',
           body,
         );
-        await waitForInstanceReady(connection, acquired.instanceId);
+        owned.add(acquired.instanceId);
         boundInstanceId = acquired.instanceId;
+        await waitForInstanceReady(connection, acquired.instanceId);
       } catch (err) {
+        for (const id of [...owned]) await release(id);
         logStderr(
           `bgls mcp: failed to open the initial instance: ${err instanceof Error ? err.message : String(err)}`,
         );
@@ -191,6 +216,7 @@ export const mcpCommand = defineCommand({
       logStderr(
         `bgls mcp: failed to connect the bound instance ${boundInstanceId}: ${err instanceof Error ? err.message : String(err)}`,
       );
+      for (const id of [...owned]) await release(id);
       process.exitCode = EXIT_CODES.operationalFailure;
       return;
     }
@@ -227,21 +253,50 @@ export const mcpCommand = defineCommand({
         '/v1/instances',
         body,
       );
+      owned.add(acquired.instanceId);
       await waitForInstanceReady(connection, acquired.instanceId);
       const token = await mintInstanceToken(connection, acquired.instanceId, MCP_CAPS);
       return { instanceId: acquired.instanceId, wsUrl: connection.wsUrl, token };
     };
 
-    const server = createAutomationMcpServer({ client, swarm: { acquire } });
+    const server = createAutomationMcpServer({ client, swarm: { acquire, release } });
+
+    // One shutdown, whichever way the session ends: the MCP client closing
+    // our stdin (the usual way an agent host lets go of a subprocess), the
+    // transport closing, or a signal. It used to close the bound client
+    // and nothing else, and the stdio transport never noticed stdin end,
+    // so the startup browser and any swarm members stayed running after
+    // the agent had gone.
+    let shuttingDown = false;
+    const shutdown = (why: string): void => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      logStderr(`bgls mcp: ${why}; releasing ${owned.size} instance(s) this server opened.`);
+      client.close();
+      // Closes every swarm, whose members' instances reach `release`
+      // through `swarm.release`; anything left (the startup instance, a
+      // member of a swarm that never finished opening) is released here.
+      void server.close().catch(() => undefined);
+      void (async () => {
+        await Promise.allSettled([...releasing]);
+        await Promise.allSettled([...owned].map((id) => release(id)));
+        process.exit(0);
+      })();
+    };
+
     // `createAutomationMcpServer` already sets `onclose` to close every
     // swarm this server opened; chain onto that rather than overwrite it
-    // (its own doc comment says so), so the bound client is released too
-    // once the MCP client disconnects the stdio transport.
+    // (its own doc comment says so).
     const priorOnClose = server.onclose;
     server.onclose = () => {
       priorOnClose?.();
-      client.close();
+      shutdown('the MCP transport closed');
     };
+    process.stdin.once('end', () => shutdown('stdin closed'));
+    process.stdin.once('close', () => shutdown('stdin closed'));
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const) {
+      process.on(signal, () => shutdown(`received ${signal}`));
+    }
 
     const transport = new StdioServerTransport();
     await server.connect(transport);
@@ -249,9 +304,8 @@ export const mcpCommand = defineCommand({
       `bgls mcp: serving over stdio; bound target ${client.targetId} on instance ${boundInstanceId} at ${connection.endpoint}.`,
     );
 
-    // Keep the process alive until the MCP client disconnects the stdio
-    // transport (server.onclose above then fires) or this process is
-    // killed. Mirrors `bgls serve`'s own never-resolving promise.
+    // Keep the process alive until `shutdown` above exits it. Mirrors
+    // `bgls serve`'s own never-resolving promise.
     await new Promise<void>(() => undefined);
   },
 });

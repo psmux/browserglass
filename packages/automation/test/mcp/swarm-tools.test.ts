@@ -319,4 +319,56 @@ describe('the swarm MCP tools', () => {
 
     boundClient.close();
   });
+
+  describe('swarm.release: the instances behind dropped members are given back', () => {
+    async function stateWithRelease() {
+      const { client: boundClient } = await connectFakeClient();
+      const swarmHarness = createFakeGatewayHarness();
+      const swarmOpts = fixtureSwarmOptions(swarmHarness);
+      const released: string[] = [];
+      const options: AutomationMcpServerOptions = {
+        client: boundClient,
+        swarm: {
+          acquire: swarmOpts.acquire,
+          transport: swarmOpts.transport,
+          release: async (instanceId) => {
+            released.push(instanceId);
+          },
+        },
+      };
+      return { state: createMcpStateForTest(options), swarmHarness, released, options };
+    }
+
+    it('bg_swarm_shrink releases only the members it dropped', async () => {
+      const { state, swarmHarness, released } = await stateWithRelease();
+      const { swarmId } = await openSwarmViaTool(state, swarmHarness, 3);
+
+      await callAutomationTool(state, 'bg_swarm_shrink', { swarmId, n: 1 });
+      expect(released).toEqual(['inst_swarm_2']);
+
+      await callAutomationTool(state, 'bg_swarm_close', { swarmId });
+      expect(released.sort()).toEqual(['inst_swarm_0', 'inst_swarm_1', 'inst_swarm_2']);
+    });
+
+    it('closing the MCP connection releases every member of every swarm still open', async () => {
+      const { swarmHarness, released, options } = await stateWithRelease();
+      const server = createAutomationMcpServer(options);
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const mcpClient = new Client({ name: 'test-client', version: '0.0.0' });
+      await Promise.all([server.connect(serverTransport), mcpClient.connect(clientTransport)]);
+
+      const openPromise = mcpClient.callTool({ name: 'bg_swarm_open', arguments: { size: 2 } });
+      await tick();
+      completeSwarmMemberHandshake(swarmHarness, 0);
+      completeSwarmMemberHandshake(swarmHarness, 1);
+      expect((await openPromise).isError).toBeFalsy();
+
+      await mcpClient.close();
+      await tick();
+      await tick();
+
+      expect(released.sort()).toEqual(['inst_swarm_0', 'inst_swarm_1']);
+      options.client.close();
+    });
+  });
 });
