@@ -34,6 +34,7 @@ import {
   transition,
 } from '@browserglass/protocol';
 import type { CdpBridge } from '../cdp/bridge.js';
+import { type TimerHandle, clearTimer, scheduleTimer } from '../cdp/platform.js';
 import type { TargetRegistry } from '../cdp/target-registry.js';
 import type { TargetRuntime } from '../cdp/target-types.js';
 import type { CdpSessionId, Unsubscribe } from '../cdp/types.js';
@@ -1053,6 +1054,25 @@ export class Session {
       // Input cancels recovery except when the signal is `renderer_hung`
       // (input during a genuine hang proves nothing).
       this.recoveryRunner.cancelOnInput(targetId);
+    }
+  }
+
+  /**
+   * Waits until the input already sent to `targetId` has been handled by
+   * the page, for at most `timeoutMs`, so a read straight after a click or
+   * a keystroke does not overtake it. See `InputDispatcher.settledFor`.
+   * Never rejects, and gives up quietly at the bound: a read that waited
+   * the full bound and then ran is still better than one that failed.
+   */
+  async inputSettled(targetId: string, timeoutMs = 1000): Promise<void> {
+    let timer: TimerHandle | null = null;
+    const bound = new Promise<void>((resolve) => {
+      timer = scheduleTimer(resolve, timeoutMs);
+    });
+    try {
+      await Promise.race([this.inputDispatcher.settledFor(targetId), bound]);
+    } finally {
+      clearTimer(timer);
     }
   }
 

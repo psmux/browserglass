@@ -285,7 +285,17 @@ Selectors are CSS by default. `text=`, `xpath=`, `label=`, `ref=`,
 `>>`: `'input#first >> xpath=ancestor::label[1]'`. There is no strict
 mode: a selector matching several elements is a fact about the page, not
 an error; only the acting verbs choose one, and they say which they chose
-and out of how many. Every one of `RESOLVE_SCRIPT`, `WAIT_SCRIPT`,
+and out of how many.
+
+`text=` needs care. `text=Logout` is a substring match and ignores case,
+so it also matches a heading that says "click logout below". Quote it,
+`text="Logout"`, to match only elements whose whole text is "Logout"
+(whitespace collapsed, case still ignored). When an unquoted `text=`
+matches several elements, the acting verbs act on the first actionable one
+whose whole text equals the needle, and fall back to document order only
+when none does.
+
+Every one of `RESOLVE_SCRIPT`, `WAIT_SCRIPT`,
 `READ_SCRIPT`, `CLEAR_SCRIPT`, `SELECT_SCRIPT`, and `DISPATCH_CLICK_SCRIPT`
 in `browserglass/locator/script.py` is the SAME JavaScript source string
 the TypeScript SDK sends (verified byte-for-byte identical, module doc
@@ -308,6 +318,10 @@ tree.total, tree.truncated          # the real count, and whether the reply was 
 `role=<role>` or `role=<role>[name="<exact name>"]` is a locator selector
 built on the same CDP call, so it composes with `resolve()`/`click()`/`fill()`
 like any other selector, and chains: `'div.form >> role=button'`.
+The name is compared whole and case sensitive after whitespace is trimmed
+and collapsed and icon font glyphs (Unicode private use characters) are
+dropped on both sides, so `name="Login"` matches a button Chrome names as
+an icon glyph, a space, then "Login".
 Both need the `devtools` capability in addition to `evaluate`, checked
 locally so a caller missing it fails fast:
 

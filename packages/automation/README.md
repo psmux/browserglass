@@ -157,12 +157,25 @@ chained segment. There is no strict mode: a selector matching three
 elements is a fact about the page, not an error, and the acting verbs say
 which one they chose and out of how many.
 
+`text=` needs care. `text=Logout` is a substring match and ignores case,
+so it also matches a heading that says "click logout below". Quote it,
+`text="Logout"`, to match only elements whose whole text is "Logout"
+(whitespace collapsed, case still ignored). When an unquoted `text=`
+matches several elements, the acting verbs act on the first actionable one
+whose whole text equals the needle, and fall back to the first actionable
+match in document order only when none does. `resolve()` still returns
+every match, in document order.
+
 `role=button` or `role=button[name="Submit"]` matches the real accessible
 role and name, computed by Chrome's own accessibility engine
 (`Accessibility.queryAXTree`), not a `role` attribute lookalike: a
 `<button>` with no `role` attribute matches `role=button`, and an `<a>`
 with no `href` does not match `role=link`, because it genuinely is not a
-link. `client.a11y()` reads the same tree directly, for an LLM agent that
+link. The name is compared whole and case sensitive, after whitespace is
+trimmed and collapsed and icon font glyphs (Unicode private use
+characters) are dropped on both sides. So `role=button[name="Login"]`
+matches a button whose name Chrome reports as an icon glyph, a space, then
+"Login". `client.a11y()` reads the same tree directly, for an LLM agent that
 wants the page's roles, names and actionable state without a selector at
 all. Both need `devtools` in addition to `evaluate`.
 
@@ -179,6 +192,17 @@ in the same space a click, a hover, or `pageMap()` expects.
 caring about open and filter on `keydown`. It also stands down mid-word
 when a person takes the browser, and tells you which character it stopped
 on.
+
+`fill` reads the field back afterwards and reports `verified`. A mismatch
+does not throw unless you pass `strict: true`, because a masked field (a
+phone number that comes back as "(555) 010-9999") rewrites what you typed
+on purpose. The catch is that a character the page dropped also comes back
+as `ok: true, verified: false`. Check `verified`, or pass `strict: true`
+for passwords and any field you do not expect the page to reformat:
+
+```ts
+await client.fill('#password', secret, { strict: true }); // throws TIMEOUT on a mismatch
+```
 
 Beyond `click`/`fill`/`resolve`, the locator surface also has `hover()`
 (moves the pointer, for a `:hover` menu with nothing to click),

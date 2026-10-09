@@ -501,7 +501,7 @@ export const AUTOMATION_MCP_TOOLS: readonly Tool[] = Object.freeze([
   {
     name: 'bg_resolve',
     description:
-      'Finds every element a selector matches and reports, for each, its rect, all five actionability answers (attached, visible, enabled, stable, hitTestOk), and what is sitting on top of it (occludedBy), in ONE round trip. This is the primitive an agent driving over MCP should reach for: there is no element-handle API on this surface, so bg_resolve is how an agent decides where to click or whether a field is actually fillable, rather than guessing from a screenshot or paying for a second tool call. Matching nothing is an ordinary answer (0 matches), not an error; matching many is also ordinary, there is no strict mode here. Selector dialect: css= (default), text= (substring, case-insensitive; text="exact phrase" for an exact match), xpath= (accepted only as a chained segment), label= (aria-labelledby, then aria-label, then label[for], then a wrapping label, first non-empty wins), ref= (a stamp from an earlier bg_resolve/bg_click/bg_fill/bg_select), visible=; segments chain with \'>>\', e.g. "input#first >> xpath=ancestor::label[1]". Requires the evaluate capability.',
+      'Finds every element a selector matches and reports, for each, its rect, all five actionability answers (attached, visible, enabled, stable, hitTestOk), and what is sitting on top of it (occludedBy), in ONE round trip. This is the primitive an agent driving over MCP should reach for: there is no element-handle API on this surface, so bg_resolve is how an agent decides where to click or whether a field is actually fillable, rather than guessing from a screenshot or paying for a second tool call. Matching nothing is an ordinary answer (0 matches), not an error; matching many is also ordinary, there is no strict mode here. Selector dialect: css= (default), text= (substring, case-insensitive, so text=Logout also matches a heading saying "click logout below"; text="Logout" matches only elements whose whole text is Logout, case still ignored; acting verbs prefer a whole-text match over a partial one), xpath= (accepted only as a chained segment), label= (aria-labelledby, then aria-label, then label[for], then a wrapping label, first non-empty wins), ref= (a stamp from an earlier bg_resolve/bg_click/bg_fill/bg_select), visible=; segments chain with \'>>\', e.g. "input#first >> xpath=ancestor::label[1]". Requires the evaluate capability.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -739,6 +739,11 @@ export const AUTOMATION_MCP_TOOLS: readonly Tool[] = Object.freeze([
           type: 'boolean',
           description:
             'Read the value back after typing and report whether it matches. Default true.',
+        },
+        strict: {
+          type: 'boolean',
+          description:
+            'Throw when the value read back does not match, instead of returning verified: false. Default false. Use it for passwords and any field the page should not reformat.',
         },
         scroll: {
           type: 'boolean',
@@ -2268,6 +2273,7 @@ async function callFill(
     const clear = args['clear'];
     const click = args['click'];
     const verify = args['verify'];
+    const strict = args['strict'];
     const scroll = args['scroll'];
     const result = await client.fill(selector, value, {
       ...(typeof index === 'number' ? { index } : {}),
@@ -2277,6 +2283,7 @@ async function callFill(
       ...(typeof clear === 'boolean' ? { clear } : {}),
       ...(typeof click === 'boolean' ? { click } : {}),
       ...(typeof verify === 'boolean' ? { verify } : {}),
+      ...(typeof strict === 'boolean' ? { strict } : {}),
       ...(typeof scroll === 'boolean' ? { scroll } : {}),
     });
     const verifiedNote =

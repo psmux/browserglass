@@ -310,6 +310,8 @@ export class InputDispatcher {
   private readonly onSignal: (signal: InputSignal) => void;
 
   private readonly chains = new Map<string, ChainState>();
+  /** Streamed sends written to CDP but not yet answered, per target. See {@link settledFor}. */
+  private readonly inflight = new Map<string, Set<Promise<unknown>>>();
   /**
    * Pointer and key hygiene state, keyed per `(targetId, viewerId)`.
    *
@@ -395,6 +397,30 @@ export class InputDispatcher {
   }
 
   /**
+   * Resolves once every input event already queued for `targetId` has been
+   * written AND Chrome has answered for it, so a read issued afterwards
+   * sees the page after that input, not before it.
+   *
+   * {@link tailFor} is not enough on its own. A streamed mouse or key event
+   * leaves the chain as soon as it is written (see {@link performDispatch}),
+   * long before Chrome has delivered it to the renderer, and a
+   * `Runtime.evaluate` sent next goes to the renderer by a different route
+   * and can overtake it. Measured live: a radio clicked and read back in
+   * the next call read as unchecked about one time in six. Chrome answers
+   * `Input.dispatchMouseEvent`/`dispatchKeyEvent` only after the renderer
+   * has handled the event, so waiting for those answers closes the gap.
+   *
+   * Never rejects. A failed send is reported through `onSignal` where it
+   * always was; here it only means there is nothing left to wait for.
+   */
+  async settledFor(targetId: string): Promise<void> {
+    const chain = this.chains.get(targetId);
+    if (chain) await chain.tail;
+    const inflight = this.inflight.get(targetId);
+    if (inflight && inflight.size > 0) await Promise.allSettled([...inflight]);
+  }
+
+  /**
    * Pointer and key hygiene: sends the ordered release
    * commands (touches, drag, buttons, keys) for whatever THIS VIEWER is
    * currently holding on `targetId`, then clears that viewer's held state.
@@ -439,6 +465,7 @@ export class InputDispatcher {
   /** Drops every tracked chain, held-state, bucket, and starvation entry for `targetId`. Call when the target is gone for good. Every viewer's held state for that target goes with it, however many drivers it had. */
   disposeTarget(targetId: string): void {
     this.chains.delete(targetId);
+    this.inflight.delete(targetId);
     this.heldByTargetViewer.delete(targetId);
   }
 
@@ -1121,6 +1148,7 @@ export class InputDispatcher {
     // the chain must not stall on this. `watchRacedDispatch` runs the same
     // fast-retry/late-error bookkeeping the chain used to wait for, just
     // detached from this call's own return.
+    this.trackInflight(targetId, sendPromise);
     this.watchRacedDispatch(viewerId, targetId, method, params, sendPromise, attempt);
   }
 
@@ -1170,6 +1198,25 @@ export class InputDispatcher {
           this.onSignal({ kind: 'dispatch_error', viewerId, targetId, error: err });
         });
       }
+    });
+  }
+
+  private trackInflight(targetId: string, sendPromise: Promise<unknown>): void {
+    let set = this.inflight.get(targetId);
+    if (!set) {
+      set = new Set();
+      this.inflight.set(targetId, set);
+    }
+    const tracked = sendPromise.then(
+      () => undefined,
+      () => undefined,
+    );
+    set.add(tracked);
+    void tracked.then(() => {
+      const current = this.inflight.get(targetId);
+      if (!current) return;
+      current.delete(tracked);
+      if (current.size === 0) this.inflight.delete(targetId);
     });
   }
 

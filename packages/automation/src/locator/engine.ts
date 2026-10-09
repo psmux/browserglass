@@ -53,6 +53,68 @@ import type {
 const WAIT_EVALUATE_MARGIN_MS = 2000;
 
 /**
+ * How long one in-page wait slice runs when the selector has a `role=`
+ * segment, before the accessibility query is repeated. See `waitForHop`.
+ */
+const ROLE_REQUERY_MS = 1000;
+
+/**
+ * Whether `err` is the page changing under a query rather than an answer
+ * about it: a navigation replaced the document, or the execution context the
+ * evaluate ran in was torn down. A wait keeps polling through these; every
+ * other error still ends it.
+ */
+export function isTransientNavigationError(err: unknown): boolean {
+  if (err instanceof AutomationError) {
+    if (
+      err.code === 'TARGET_CLOSED' ||
+      err.code === 'INSTANCE_GONE' ||
+      err.code === 'LEASE_REVOKED' ||
+      err.code === 'POLICY_DENIED' ||
+      err.code === 'INVALID_ARGUMENT'
+    )
+      return false;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id|Cannot find default execution context|Could not find node with given id|No frame with given id|frame (was )?detached/i.test(
+    message,
+  );
+}
+
+/** The page script's own text normalisation for `text=`: whitespace collapsed, trimmed, lower case. */
+function normalizeForTextMatch(s: string): string {
+  return s.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/**
+ * The normalised needle when `selector` ends in an unquoted (partial)
+ * `text=` segment, otherwise `null`. A quoted `text="..."` is already a
+ * whole text match and needs no preference.
+ */
+function partialTextNeedle(selector: string): string | null {
+  let segments: SelectorSegment[];
+  try {
+    segments = parseSelector(selector);
+  } catch {
+    return null;
+  }
+  const last = segments[segments.length - 1];
+  if (last === undefined || last.engine !== 'text') return null;
+  if (/^"[\s\S]*"$/.test(last.value)) return null;
+  const needle = normalizeForTextMatch(last.value);
+  return needle.length > 0 ? needle : null;
+}
+
+/** Whether a `role=` segment sits before the first `frame=` segment, i.e. one this hop resolves itself. */
+function selectorHasLiveRole(segments: SelectorSegment[]): boolean {
+  for (const seg of segments) {
+    if (seg.engine === 'frame') return false;
+    if (seg.engine === 'role') return true;
+  }
+  return false;
+}
+
+/**
  * The world every one of this engine's own six fixed scripts runs in.
  *
  * `'isolated'`, and this is the single most consequential default in the
@@ -770,114 +832,205 @@ export class LocatorEngine {
     hopDepth: number,
   ): Promise<WaitForResult> {
     const segments = parseSelector(selector);
-    const deadlineMs = Math.max(0, overallDeadline - Date.now());
-
-    const effective = await this.prepareSelector(targetId, selector, segments, deadlineMs);
-    if (effective === null) {
-      // A `role=` segment matched nothing. `detached` and `hidden` are
-      // satisfied by an empty match set (mirroring `bglsSatisfied`'s own
-      // rule for `res.total === 0`) and succeed immediately; every other
-      // state cannot be reached from zero matches and fails immediately,
-      // both without spending the deadline finding that out the slow way.
-      const observed: ResolveResult = {
-        ...emptyResult(selector, targetId),
-        engine: terminalEngine(segments),
-        segments: segments.length,
-      };
-      if (state === 'detached' || state === 'hidden') {
-        return { ...observed, waitedMs: 0, checks: 0, wakes: 0 };
-      }
-      throw this.waitTimeoutError(
-        selector,
-        state,
-        observed,
-        { timedOut: true, result: null, waitedMs: 0, checks: 0, wakes: 0 },
-        0,
-      );
-    }
-
-    // The polling passes deliberately measure less than the final one:
-    // 'attached', 'detached', 'visible' and 'hidden' do not depend on rect
-    // stability or on the hit test, and paying two animation frames plus a
-    // hit test ten times a second for an answer that does not use them is
-    // waste inside the page even when it costs nothing on the socket.
-    const wantsFullMeasure = state === 'actionable';
-    const check = this.buildResolveSpec(effective, {
-      ...opts,
-      stamp: false,
-      stable: wantsFullMeasure && opts?.stable !== false,
-      hitTest: wantsFullMeasure && opts?.hitTest !== false,
-    });
-    const stampSpec =
-      opts?.stamp === false ? null : this.buildResolveSpec(effective, { ...opts, stamp: true });
-
     const started = Date.now();
-    const wire = await this.rt.evaluateFunction<WireWaitResult>(
-      targetId,
-      WAIT_SCRIPT,
-      // `index` goes to the page, not just to the client, and it changes
-      // what the wait is waiting FOR. Without it the wait is satisfied the
-      // moment ANY match is actionable, so a caller who named index 0
-      // would be released by index 1 becoming ready and would then have to
-      // fail on its own element. Waiting for the right one is both more
-      // correct and, on a page that renders its fields in order, faster.
-      [
-        {
-          check,
-          stamp: stampSpec,
-          state,
-          deadlineMs,
-          pollMs: opts?.pollMs ?? 100,
-          index: opts?.index ?? null,
-        },
-      ],
-      deadlineMs + WAIT_EVALUATE_MARGIN_MS,
-      ENGINE_WORLD,
-    );
+    const pollMs = opts?.pollMs ?? 100;
+    // A `role=` segment is resolved by an accessibility query BEFORE the
+    // in-page wait starts, and the wait then watches the elements that
+    // query stamped. A matching element that appears later carries no
+    // stamp, so the in-page wait could never see it. With a role segment
+    // in play the in-page wait therefore runs in slices, and every slice
+    // starts with a fresh accessibility query.
+    const hasRole = selectorHasLiveRole(segments);
+    const sliceMs = hasRole ? ROLE_REQUERY_MS : Number.POSITIVE_INFINITY;
+    // Bounded by a count as well as by the clock: the unit tests drive this
+    // with fake clocks that do not always move, and a deadline-only loop
+    // spins forever there (the same trap `fill`'s read-back hit).
+    const maxRounds = Math.ceil(Math.max(0, overallDeadline - started) / Math.min(pollMs, 250)) + 2;
+    let checks = 0;
+    let wakes = 0;
+    let lastObserved: ResolveResult | null = null;
 
-    if (wire.failed === true) {
-      throw new AutomationError(
-        'INVALID_ARGUMENT',
-        `waitFor('${selector}'): the page could not evaluate the selector: ${wire.error ?? 'unknown'}`,
-        { selector, state, pageError: wire.error },
-      );
-    }
+    for (let round = 0; ; round++) {
+      const deadlineMs = Math.max(0, overallDeadline - Date.now());
+      const outOfTime = deadlineMs <= 0 || round >= maxRounds;
 
-    if (wire.frameBoundary) {
-      const hop = await this.enterFrame(
-        targetId,
-        selector,
-        segments,
-        wire.frameBoundary,
-        offset,
-        hopDepth,
-      );
-      return this.waitForHop(
-        hop.targetId,
-        hop.selector,
-        opts,
-        state,
-        overallDeadline,
-        hop.offset,
-        hopDepth + 1,
-      );
-    }
-
-    const observed: ResolveResult = wire.result
-      ? {
-          ...wire.result,
-          matches: translateMatches(wire.result.matches, offset),
-          selector,
-          resolvedAtMs: Date.now(),
-          resolvedTargetId: targetId,
+      let effective: string | null;
+      try {
+        effective = await this.prepareSelector(targetId, selector, segments, deadlineMs);
+      } catch (err) {
+        // A navigation landing mid-query is not an answer about the page,
+        // it is the page changing under the question. Ask again.
+        if (!outOfTime && isTransientNavigationError(err)) {
+          await this.rt.sleep(Math.min(pollMs, deadlineMs));
+          continue;
         }
-      : emptyResult(selector, targetId);
+        // The accessibility query is given what is left of the deadline as
+        // its own timeout, so on a page that is still loading it can be the
+        // thing that runs out. That is this wait timing out, and it is
+        // reported as one, naming what was last seen.
+        if (
+          err instanceof AutomationError &&
+          err.code === 'TIMEOUT' &&
+          Date.now() >= overallDeadline - WAIT_EVALUATE_MARGIN_MS
+        ) {
+          const observed: ResolveResult = lastObserved ?? {
+            ...emptyResult(selector, targetId),
+            engine: terminalEngine(segments),
+            segments: segments.length,
+          };
+          throw this.waitTimeoutError(
+            selector,
+            state,
+            observed,
+            { timedOut: true, result: null, waitedMs: Date.now() - started, checks, wakes },
+            Date.now() - started,
+          );
+        }
+        throw err;
+      }
 
-    if (wire.timedOut) {
-      throw this.waitTimeoutError(selector, state, observed, wire, Date.now() - started);
+      if (effective === null) {
+        // A `role=` segment matched nothing. `detached` and `hidden` are
+        // satisfied by an empty match set (mirroring `bglsSatisfied`'s own
+        // rule for `res.total === 0`) and succeed immediately. Every other
+        // state keeps polling until the deadline, the same as a CSS
+        // selector that matches nothing yet: the element may still be on
+        // its way.
+        checks += 1;
+        const observed: ResolveResult = {
+          ...emptyResult(selector, targetId),
+          engine: terminalEngine(segments),
+          segments: segments.length,
+        };
+        if (state === 'detached' || state === 'hidden') {
+          return { ...observed, waitedMs: Date.now() - started, checks, wakes };
+        }
+        if (outOfTime) {
+          throw this.waitTimeoutError(
+            selector,
+            state,
+            lastObserved ?? observed,
+            { timedOut: true, result: null, waitedMs: Date.now() - started, checks, wakes },
+            Date.now() - started,
+          );
+        }
+        // An accessibility query is far heavier than an in-page check, so
+        // it is not repeated at the in-page poll rate.
+        await this.rt.sleep(Math.min(Math.max(pollMs, 250), deadlineMs));
+        continue;
+      }
+
+      // The polling passes deliberately measure less than the final one:
+      // 'attached', 'detached', 'visible' and 'hidden' do not depend on rect
+      // stability or on the hit test, and paying two animation frames plus a
+      // hit test ten times a second for an answer that does not use them is
+      // waste inside the page even when it costs nothing on the socket.
+      const wantsFullMeasure = state === 'actionable';
+      const check = this.buildResolveSpec(effective, {
+        ...opts,
+        stamp: false,
+        stable: wantsFullMeasure && opts?.stable !== false,
+        hitTest: wantsFullMeasure && opts?.hitTest !== false,
+      });
+      const stampSpec =
+        opts?.stamp === false ? null : this.buildResolveSpec(effective, { ...opts, stamp: true });
+
+      const sliceDeadlineMs = Math.min(deadlineMs, sliceMs);
+      let wire: WireWaitResult;
+      try {
+        wire = await this.rt.evaluateFunction<WireWaitResult>(
+          targetId,
+          WAIT_SCRIPT,
+          // `index` goes to the page, not just to the client, and it changes
+          // what the wait is waiting FOR. Without it the wait is satisfied the
+          // moment ANY match is actionable, so a caller who named index 0
+          // would be released by index 1 becoming ready and would then have to
+          // fail on its own element. Waiting for the right one is both more
+          // correct and, on a page that renders its fields in order, faster.
+          [
+            {
+              check,
+              stamp: stampSpec,
+              state,
+              deadlineMs: sliceDeadlineMs,
+              pollMs,
+              index: opts?.index ?? null,
+            },
+          ],
+          sliceDeadlineMs + WAIT_EVALUATE_MARGIN_MS,
+          ENGINE_WORLD,
+        );
+      } catch (err) {
+        // "Inspected target navigated or closed" and friends: the document
+        // the wait was running in went away, which is exactly what a wait
+        // straight after a click that submits a form has to sit through.
+        // The deadline is the caller's, so keep polling the new document.
+        if (!outOfTime && Date.now() < overallDeadline && isTransientNavigationError(err)) {
+          await this.rt.sleep(Math.min(pollMs, Math.max(0, overallDeadline - Date.now())));
+          continue;
+        }
+        throw err;
+      }
+
+      if (wire.failed === true) {
+        throw new AutomationError(
+          'INVALID_ARGUMENT',
+          `waitFor('${selector}'): the page could not evaluate the selector: ${wire.error ?? 'unknown'}`,
+          { selector, state, pageError: wire.error },
+        );
+      }
+
+      if (wire.frameBoundary) {
+        const hop = await this.enterFrame(
+          targetId,
+          selector,
+          segments,
+          wire.frameBoundary,
+          offset,
+          hopDepth,
+        );
+        return this.waitForHop(
+          hop.targetId,
+          hop.selector,
+          opts,
+          state,
+          overallDeadline,
+          hop.offset,
+          hopDepth + 1,
+        );
+      }
+
+      checks += wire.checks;
+      wakes += wire.wakes;
+      const observed: ResolveResult = wire.result
+        ? {
+            ...wire.result,
+            matches: translateMatches(wire.result.matches, offset),
+            selector,
+            resolvedAtMs: Date.now(),
+            resolvedTargetId: targetId,
+          }
+        : emptyResult(selector, targetId);
+      lastObserved = observed;
+
+      if (wire.timedOut) {
+        if (!outOfTime && hasRole && Date.now() < overallDeadline) continue;
+        throw this.waitTimeoutError(
+          selector,
+          state,
+          observed,
+          { ...wire, checks, wakes },
+          Date.now() - started,
+        );
+      }
+
+      return {
+        ...observed,
+        waitedMs: round === 0 ? wire.waitedMs : Date.now() - started,
+        checks,
+        wakes,
+      };
     }
-
-    return { ...observed, waitedMs: wire.waitedMs, checks: wire.checks, wakes: wire.wakes };
   }
 
   /**
@@ -951,9 +1104,27 @@ export class LocatorEngine {
    * With an explicit index, exactly that one, whatever state it is in, so
    * that the failure report is about the element the caller meant rather
    * than about a different one the verb wandered to.
+   *
+   * One refinement for a partial `text=` selector (unquoted, so substring
+   * and case insensitive): an actionable match whose whole text equals the
+   * needle wins over one that only contains it. `text=Logout` on a page
+   * whose heading says "click logout below" ahead of the Logout link used
+   * to act on the heading, which was first in document order. The heading
+   * is still in the result; it just is not the one acted on.
    */
-  private pick(result: ResolveResult, index: number | undefined): LocatorMatch | undefined {
+  private pick(
+    result: ResolveResult,
+    index: number | undefined,
+    selector?: string,
+  ): LocatorMatch | undefined {
     if (index !== undefined) return result.matches[index];
+    const needle = selector !== undefined ? partialTextNeedle(selector) : null;
+    if (needle !== null) {
+      const whole = result.matches.find(
+        (m) => isActionable(m) && normalizeForTextMatch(m.text ?? '') === needle,
+      );
+      if (whole !== undefined) return whole;
+    }
     return result.matches.find(isActionable);
   }
 
@@ -981,7 +1152,7 @@ export class LocatorEngine {
         { verb, selector, index, matchCount: result.total, engine: result.engine, url: result.url },
       );
     }
-    const chosen = this.pick(result, index);
+    const chosen = this.pick(result, index, selector);
     if (chosen === undefined || !isActionable(chosen)) {
       throw actionabilityError(
         verb,
@@ -1571,6 +1742,33 @@ export class LocatorEngine {
         if (next === undefined || next === null || !next.found) break;
         actual = next.value ?? null;
         verified = actual === value;
+      }
+
+      if (verified === false && opts?.strict === true) {
+        // The values themselves stay out of the error: this is the path a
+        // password takes. Lengths and the first differing position are
+        // enough to tell a dropped character from a reformatted field.
+        const got = actual ?? '';
+        let firstMismatchAt = 0;
+        while (
+          firstMismatchAt < got.length &&
+          firstMismatchAt < value.length &&
+          got[firstMismatchAt] === value[firstMismatchAt]
+        )
+          firstMismatchAt += 1;
+        throw new AutomationError(
+          'TIMEOUT',
+          `fill('${selector}', strict): the field holds ${got.length} character(s) after typing, expected ${value.length}, first difference at index ${firstMismatchAt}. The keys were delivered; the page did not end up with the value.`,
+          {
+            selector,
+            index: chosen.index,
+            delivered: true,
+            verified: false,
+            expectedLength: value.length,
+            actualLength: got.length,
+            firstMismatchAt,
+          },
+        );
       }
     }
 

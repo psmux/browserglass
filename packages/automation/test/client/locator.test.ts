@@ -1,6 +1,7 @@
 import { MAX_EVALUATE_TIMEOUT_MS } from '@browserglass/protocol';
 import type { Capability, EvaluateWorld } from '@browserglass/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AutomationError } from '../../src/errors.js';
 import { AutomationClient } from '../../src/index.js';
 import { LocatorEngine, type LocatorRuntime } from '../../src/locator/engine.js';
 import {
@@ -155,6 +156,8 @@ class FakeRuntime implements LocatorRuntime {
   }> = [];
   /** Queued answers, consumed in order; the last one repeats. Unset, a call throws: a test exercising `role=` has to say what the CDP side found. */
   roleReplies: Array<{ attr: string | null }> = [];
+  /** Thrown, one per call and in order, by `WAIT_SCRIPT` evaluations before any reply is used. */
+  waitErrors: unknown[] = [];
   /** What `listFrameTargets()` answers. A test wanting a cross-origin `frame=` hop to succeed sets this to the one `iframe`-kind target its `src` should correlate to. */
   frameTargets: Array<{ targetId: string; url: string }> = [];
 
@@ -174,7 +177,11 @@ class FakeRuntime implements LocatorRuntime {
   ): Promise<T> {
     this.evaluations.push({ targetId, source, args, timeoutMs, world });
     if (source === RESOLVE_SCRIPT) return this.shift(this.resolveReplies) as T;
-    if (source === WAIT_SCRIPT) return this.shift(this.waitReplies) as T;
+    if (source === WAIT_SCRIPT) {
+      const err = this.waitErrors.shift();
+      if (err !== undefined) throw err;
+      return this.shift(this.waitReplies) as T;
+    }
     if (source === READ_SCRIPT) return this.shift(this.readReplies) as T;
     if (source === CLEAR_SCRIPT) return this.clearReply as T;
     if (source === DISPATCH_CLICK_SCRIPT) return this.dispatchReply as T;
@@ -529,6 +536,75 @@ describe('role= on top of resolve/waitFor', () => {
     expect(rt.count(WAIT_SCRIPT)).toBe(0);
   });
 
+  it('keeps polling a role= wait until the accessibility query finds the element', async () => {
+    const { engine, rt } = engineWith();
+    rt.roleReplies = [{ attr: null }, { attr: null }, { attr: 'data-bgls-ax-late' }];
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([wireMatch()]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+
+    const r = await engine.waitFor('t1', 'role=button[name="Late one"]', { timeoutMs: 5000 });
+
+    expect(r.total).toBe(1);
+    expect(rt.roleCalls).toHaveLength(3);
+    expect(r.checks).toBe(3);
+    expect(rt.count(WAIT_SCRIPT)).toBe(1);
+  });
+
+  it('fails a role= wait that never matches only after polling, reporting every check', async () => {
+    const { engine, rt } = engineWith();
+    rt.roleReplies = [{ attr: null }];
+
+    const err = await engine
+      .waitFor('t1', 'role=dialog', { timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: 'NOT_FOUND' });
+    expect(rt.roleCalls.length).toBeGreaterThan(1);
+    expect((err as { details: { checks: number } }).details.checks).toBe(rt.roleCalls.length);
+  });
+
+  it('re-queries the accessibility tree when a role= wait slice times out', async () => {
+    const { engine, rt } = engineWith();
+    rt.roleReplies = [{ attr: 'data-bgls-ax-a' }, { attr: 'data-bgls-ax-b' }];
+    rt.waitReplies = [
+      { timedOut: true, result: wireResult([]), waitedMs: 1000, checks: 10, wakes: 0 },
+      { timedOut: false, result: wireResult([wireMatch()]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+
+    const r = await engine.waitFor('t1', 'role=button', { timeoutMs: 5000 });
+
+    expect(r.total).toBe(1);
+    expect(rt.roleCalls).toHaveLength(2);
+    expect(rt.lastSpec(WAIT_SCRIPT)['deadlineMs']).toBeLessThanOrEqual(1000);
+  });
+
+  it('keeps waiting through a navigation that tears down the evaluate', async () => {
+    const { engine, rt } = engineWith();
+    rt.waitErrors = [
+      new AutomationError('PROTOCOL_ERROR', 'Inspected target navigated or closed'),
+      new Error('Execution context was destroyed.'),
+    ];
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([wireMatch()]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+
+    const r = await engine.waitFor('t1', '#flash', { timeoutMs: 5000 });
+
+    expect(r.total).toBe(1);
+    expect(rt.count(WAIT_SCRIPT)).toBe(3);
+  });
+
+  it('does not retry an error that is not a navigation', async () => {
+    const { engine, rt } = engineWith();
+    rt.waitErrors = [new AutomationError('TARGET_CLOSED', 'Inspected target navigated or closed')];
+    await expect(engine.waitFor('t1', '#flash', { timeoutMs: 5000 })).rejects.toMatchObject({
+      code: 'TARGET_CLOSED',
+    });
+    rt.waitErrors = [new Error('boom')];
+    await expect(engine.waitFor('t1', '#flash', { timeoutMs: 5000 })).rejects.toThrow('boom');
+  });
+
   it("waitFor(state: 'visible') times out immediately when role= matches nothing, without spending the deadline", async () => {
     const { engine, rt } = engineWith();
     rt.roleReplies = [{ attr: null }];
@@ -851,6 +927,47 @@ describe('click', () => {
       verified: null,
       reResolved: false,
     });
+  });
+
+  it('acts on the whole-text match for a partial text= selector, not an earlier container that mentions it', async () => {
+    const heading = wireMatch({
+      index: 0,
+      ref: 'bgtest_0',
+      tagName: 'h4',
+      text: 'Welcome to the Secure Area. When you are done click logout below.',
+      center: { x: 300, y: 100 },
+    });
+    const link = wireMatch({
+      index: 1,
+      ref: 'bgtest_1',
+      tagName: 'i',
+      text: 'Logout',
+      center: { x: 80, y: 200 },
+    });
+    const { engine, rt } = engineWith();
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([heading, link]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+    const r = await engine.click('t1', 'text=Logout');
+    expect(rt.clicks).toEqual([{ x: 80, y: 200, opts: {} }]);
+    expect(r.index).toBe(1);
+    expect(r.matchCount).toBe(2);
+  });
+
+  it('keeps document order for a partial text= selector when no match is the whole text', async () => {
+    const a = wireMatch({ index: 0, ref: 'bgtest_0', text: 'Log out now', center: { x: 1, y: 1 } });
+    const b = wireMatch({
+      index: 1,
+      ref: 'bgtest_1',
+      text: 'Please log out',
+      center: { x: 2, y: 2 },
+    });
+    const { engine, rt } = engineWith();
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([a, b]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+    await engine.click('t1', 'text=log out');
+    expect(rt.clicks).toEqual([{ x: 1, y: 1, opts: {} }]);
   });
 
   /**
@@ -1196,6 +1313,23 @@ describe('fill', () => {
     const r = await engine.fill('t1', '#phone', '5550109999');
     expect(r.verified).toBe(false);
     expect(r.actual).toBe('(555) 010-9999');
+  });
+
+  it('throws on a value that did not stick when strict is set, without echoing the value', async () => {
+    const { engine, rt } = engineWith();
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([editable()]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+    // The live failure: the trailing '!' of a password never reached the field.
+    rt.readReplies = [{ found: true, value: 'SuperSecretPassword' }];
+    const err = await engine
+      .fill('t1', '#password', 'SuperSecretPassword!', { strict: true })
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'TIMEOUT',
+      details: { verified: false, expectedLength: 20, actualLength: 19, firstMismatchAt: 19 },
+    });
+    expect(String((err as Error).message)).not.toContain('SuperSecret');
   });
 
   it('refuses a match that is not editable, naming the element it actually found', async () => {

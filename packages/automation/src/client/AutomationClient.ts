@@ -2476,7 +2476,8 @@ export class AutomationClient {
    *  * `css=` is the default because it is what real call sites are:
    *    attribute selectors, overwhelmingly.
    *  * `text=` matches on normalised `textContent` (substring and
-   *    case-insensitive; `text="exact phrase"` for an exact match) and
+   *    case-insensitive; `text="exact phrase"` matches the whole text,
+   *    still ignoring case) and
    *    returns only the innermost matching elements, since every ancestor
    *    contains the text too. It reads `textContent` rather than
    *    `innerText` because `innerText` forces layout for every element in
@@ -2660,6 +2661,15 @@ export class AutomationClient {
    *
    * The value is read back afterwards and reported as `verified`, for the
    * same reason `click` has a `verify`: delivery is not success.
+   *
+   * CHECK `verified`. A mismatch does NOT throw by default, because a
+   * masked or reformatting field (a phone number coming back as
+   * "(555) 010-9999") is a legitimate result the caller has to look at.
+   * The cost of that default is that a dropped character also comes back
+   * as `ok: true, verified: false`, and a login whose password lost a
+   * character fails without an exception. Pass `strict: true` to make any
+   * mismatch throw `TIMEOUT` instead; that is the right setting for
+   * credentials and for any field you do not expect the page to rewrite.
    */
   async fill(selector: string, value: string, opts?: LocatorFillOptions): Promise<FillResult> {
     const targetId = this._targetId;

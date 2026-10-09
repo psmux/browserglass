@@ -723,7 +723,7 @@ export type { A11yNode };
 export interface A11yOptions {
   /** Restrict to nodes whose computed role EXACTLY equals this. Omit for every role. Narrowing here, rather than reading the whole tree and filtering client side, is the same advice this codebase already gives about narrowing an `evaluate()` expression: see `@browserglass/protocol`'s `wire/messages/a11y.ts`, "why `queryAXTree`, not `getFullAXTree`". */
   role?: string;
-  /** Restrict to nodes whose computed accessible name EXACTLY equals this. Exact, not substring: Chrome's own `queryAXTree` matching, not Playwright's normalised-and-substring default. */
+  /** Restrict to nodes whose computed accessible name equals this after trimming and collapsing whitespace on both sides. Whole name and case sensitive, not a substring: Playwright's `exact: true` rule, not its default. */
   name?: string;
   /** Cap on returned nodes, before the server's own byte ceiling is also applied. Default `DEFAULT_A11Y_MAX_NODES` (200), capped server side at `MAX_A11Y_MAX_NODES` (1000). `A11yResult.total` still reports the real match count. */
   maxNodes?: number;

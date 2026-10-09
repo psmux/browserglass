@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import string
 import time
 from dataclasses import replace
@@ -61,6 +62,49 @@ WAIT_EVALUATE_MARGIN_MS = 2000
 
 # Default overall deadline for click/fill/select.
 DEFAULT_ACT_TIMEOUT_MS = 8000
+
+# How long one in-page wait slice runs when the selector has a ``role=``
+# segment, before the accessibility query is repeated. See ``wait_for``.
+ROLE_REQUERY_MS = 1000
+
+_TRANSIENT_NAVIGATION = re.compile(
+    r"Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id"
+    r"|Cannot find default execution context|Could not find node with given id|No frame with given id|frame (was )?detached",
+    re.IGNORECASE,
+)
+
+
+def _normalize_for_text_match(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip().lower()
+
+
+def _partial_text_needle(selector: str) -> Optional[str]:
+    """The normalised needle when ``selector`` ends in an unquoted
+    (partial) ``text=`` segment, otherwise ``None``."""
+    try:
+        segments = parse_selector(selector)
+    except AutomationError:
+        return None
+    if not segments or segments[-1].engine != "text":
+        return None
+    value = segments[-1].value
+    if re.match(r'^"[\s\S]*"$', value):
+        return None
+    needle = _normalize_for_text_match(value)
+    return needle or None
+
+
+def is_transient_navigation_error(err: BaseException) -> bool:
+    """Whether ``err`` is the page changing under a query (a navigation
+    replaced the document, or the execution context went away) rather than
+    an answer about it. A wait keeps polling through these and nothing
+    else. Mirrors ``isTransientNavigationError`` in engine.ts."""
+    if isinstance(err, AutomationError) and err.code in (
+        "TARGET_CLOSED", "INSTANCE_GONE", "LEASE_REVOKED", "POLICY_DENIED", "INVALID_ARGUMENT",
+    ):
+        return False
+    message = err.message if isinstance(err, AutomationError) else str(err)
+    return bool(_TRANSIENT_NAVIGATION.search(message))
 
 # The world every one of this engine's own six fixed scripts runs in.
 #
@@ -357,73 +401,137 @@ class LocatorEngine:
         segments = parse_selector(selector)
         state = opts.get("state", "visible")
         asked_ms = opts.get("timeout_ms", self._rt.default_timeout_ms)
-        deadline_ms = max(0.0, min(asked_ms, MAX_EVALUATE_TIMEOUT_MS - WAIT_EVALUATE_MARGIN_MS))
-
-        effective = await self._prepare_selector(target_id, selector, segments, deadline_ms)
-        if effective is None:
-            # A `role=` segment matched nothing. `detached` and `hidden` are
-            # satisfied by an empty match set and succeed immediately; every
-            # other state cannot be reached from zero matches and fails
-            # immediately, both without spending the deadline finding that
-            # out the slow way.
-            observed = replace(_empty_result(selector), engine=terminal_engine(segments), segments=len(segments))
-            if state in ("detached", "hidden"):
-                return WaitForResult(
-                    **{f.name: getattr(observed, f.name) for f in observed.__dataclass_fields__.values()},  # type: ignore[attr-defined]
-                    waited_ms=0,
-                    checks=0,
-                    wakes=0,
-                )
-            raise self._wait_timeout_error(selector, state, observed, {"checks": 0, "wakes": 0}, 0)
-
-        wants_full_measure = state == "actionable"
-        check = self._build_resolve_spec(
-            effective,
-            {
-                **opts,
-                "stamp": False,
-                "stable": wants_full_measure and opts.get("stable", True) is not False,
-                "hit_test": wants_full_measure and opts.get("hit_test", True) is not False,
-            },
-        )
-        stamp_spec = None if opts.get("stamp") is False else self._build_resolve_spec(effective, {**opts, "stamp": True})
-
+        budget_ms = max(0.0, min(asked_ms, MAX_EVALUATE_TIMEOUT_MS - WAIT_EVALUATE_MARGIN_MS))
+        poll_ms = opts.get("poll_ms", 100)
         started = time.time() * 1000
-        wire = await self._rt.evaluate_function(
-            target_id,
-            WAIT_SCRIPT,
-            [
+        overall_deadline = started + budget_ms
+        # A ``role=`` segment is resolved by an accessibility query BEFORE
+        # the in-page wait, which then watches only the elements that query
+        # stamped. An element that appears later has no stamp, so with a
+        # role segment the in-page wait runs in slices and each slice starts
+        # with a fresh query. See engine.ts's ``waitForHop``.
+        has_role = any(seg.engine == "role" for seg in segments)
+        slice_ms = ROLE_REQUERY_MS if has_role else float("inf")
+        # Bounded by a count as well as the clock, so a fake clock that does
+        # not move cannot spin this forever.
+        max_rounds = int(budget_ms / min(poll_ms, 250)) + 2
+        checks = 0
+        wakes = 0
+        last_observed: Optional[ResolveResult] = None
+        round_no = 0
+
+        while True:
+            deadline_ms = max(0.0, overall_deadline - time.time() * 1000)
+            out_of_time = deadline_ms <= 0 or round_no >= max_rounds
+            round_no += 1
+
+            try:
+                effective = await self._prepare_selector(target_id, selector, segments, deadline_ms)
+            except Exception as err:
+                if not out_of_time and is_transient_navigation_error(err):
+                    await self._rt.sleep(min(poll_ms, deadline_ms))
+                    continue
+                # The accessibility query runs with what is left of the
+                # deadline as its own timeout; when that is what ran out,
+                # report it as this wait timing out.
+                if (
+                    isinstance(err, AutomationError)
+                    and err.code == "TIMEOUT"
+                    and time.time() * 1000 >= overall_deadline - WAIT_EVALUATE_MARGIN_MS
+                ):
+                    observed = last_observed or replace(
+                        _empty_result(selector), engine=terminal_engine(segments), segments=len(segments)
+                    )
+                    raise self._wait_timeout_error(
+                        selector, state, observed, {"checks": checks, "wakes": wakes}, time.time() * 1000 - started
+                    )
+                raise
+
+            if effective is None:
+                # A ``role=`` segment matched nothing. ``detached`` and
+                # ``hidden`` are satisfied by an empty match set; every other
+                # state keeps polling until the deadline, like a CSS selector
+                # that matches nothing yet.
+                checks += 1
+                observed = replace(_empty_result(selector), engine=terminal_engine(segments), segments=len(segments))
+                if state in ("detached", "hidden"):
+                    return WaitForResult(
+                        **{f.name: getattr(observed, f.name) for f in observed.__dataclass_fields__.values()},  # type: ignore[attr-defined]
+                        waited_ms=time.time() * 1000 - started,
+                        checks=checks,
+                        wakes=wakes,
+                    )
+                if out_of_time:
+                    raise self._wait_timeout_error(
+                        selector, state, last_observed or observed, {"checks": checks, "wakes": wakes}, time.time() * 1000 - started
+                    )
+                await self._rt.sleep(min(max(poll_ms, 250), deadline_ms))
+                continue
+
+            wants_full_measure = state == "actionable"
+            check = self._build_resolve_spec(
+                effective,
                 {
-                    "check": check,
-                    "stamp": stamp_spec,
-                    "state": state,
-                    "deadlineMs": deadline_ms,
-                    "pollMs": opts.get("poll_ms", 100),
-                    "index": opts.get("index"),
-                }
-            ],
-            deadline_ms + WAIT_EVALUATE_MARGIN_MS,
-            world=ENGINE_WORLD,
-        )
-
-        if wire.get("failed") is True:
-            raise AutomationError(
-                "INVALID_ARGUMENT",
-                f"waitFor('{selector}'): the page could not evaluate the selector: {wire.get('error', 'unknown')}",
-                {"selector": selector, "state": state, "pageError": wire.get("error")},
+                    **opts,
+                    "stamp": False,
+                    "stable": wants_full_measure and opts.get("stable", True) is not False,
+                    "hit_test": wants_full_measure and opts.get("hit_test", True) is not False,
+                },
             )
+            stamp_spec = None if opts.get("stamp") is False else self._build_resolve_spec(effective, {**opts, "stamp": True})
 
-        observed = _wire_to_resolve_result(wire["result"], selector) if wire.get("result") else _empty_result(selector)
+            slice_deadline_ms = min(deadline_ms, slice_ms)
+            try:
+                wire = await self._rt.evaluate_function(
+                    target_id,
+                    WAIT_SCRIPT,
+                    [
+                        {
+                            "check": check,
+                            "stamp": stamp_spec,
+                            "state": state,
+                            "deadlineMs": slice_deadline_ms,
+                            "pollMs": poll_ms,
+                            "index": opts.get("index"),
+                        }
+                    ],
+                    slice_deadline_ms + WAIT_EVALUATE_MARGIN_MS,
+                    world=ENGINE_WORLD,
+                )
+            except Exception as err:
+                # The document the wait ran in went away (a click that
+                # submitted a form, say). The deadline is the caller's, so
+                # keep polling the new document.
+                if not out_of_time and time.time() * 1000 < overall_deadline and is_transient_navigation_error(err):
+                    await self._rt.sleep(min(poll_ms, max(0.0, overall_deadline - time.time() * 1000)))
+                    continue
+                raise
 
-        if wire.get("timedOut"):
-            raise self._wait_timeout_error(selector, state, observed, wire, time.time() * 1000 - started)
+            if wire.get("failed") is True:
+                raise AutomationError(
+                    "INVALID_ARGUMENT",
+                    f"waitFor('{selector}'): the page could not evaluate the selector: {wire.get('error', 'unknown')}",
+                    {"selector": selector, "state": state, "pageError": wire.get("error")},
+                )
 
-        return WaitForResult(
-            **{f.name: getattr(observed, f.name) for f in observed.__dataclass_fields__.values()},  # type: ignore[attr-defined]
-            waited_ms=wire["waitedMs"],
-            checks=wire["checks"],
-            wakes=wire["wakes"],
-        )
+            checks += wire.get("checks", 0)
+            wakes += wire.get("wakes", 0)
+            observed = _wire_to_resolve_result(wire["result"], selector) if wire.get("result") else _empty_result(selector)
+            last_observed = observed
+
+            if wire.get("timedOut"):
+                if not out_of_time and has_role and time.time() * 1000 < overall_deadline:
+                    continue
+                raise self._wait_timeout_error(
+                    selector, state, observed, {**wire, "checks": checks, "wakes": wakes}, time.time() * 1000 - started
+                )
+
+            return WaitForResult(
+                **{f.name: getattr(observed, f.name) for f in observed.__dataclass_fields__.values()},  # type: ignore[attr-defined]
+                waited_ms=wire["waitedMs"] if round_no == 1 else time.time() * 1000 - started,
+                checks=checks,
+                wakes=wakes,
+            )
 
     def _wait_timeout_error(
         self,
@@ -467,9 +575,19 @@ class LocatorEngine:
     # The choosing rule, shared by every acting verb
     # ------------------------------------------------------------------
 
-    def _pick(self, result: ResolveResult, index: Optional[int]) -> Optional[LocatorMatch]:
+    def _pick(self, result: ResolveResult, index: Optional[int], selector: Optional[str] = None) -> Optional[LocatorMatch]:
         if index is not None:
             return result.matches[index] if 0 <= index < len(result.matches) else None
+        # A partial ``text=`` selector prefers an actionable match whose whole
+        # text equals the needle over one that only contains it, so
+        # ``text=Logout`` acts on the Logout link rather than on a heading
+        # earlier in the page that mentions logging out. See engine.ts's
+        # ``pick``.
+        needle = _partial_text_needle(selector) if selector is not None else None
+        if needle is not None:
+            for m in result.matches:
+                if _is_actionable(m) and _normalize_for_text_match(m.text or "") == needle:
+                    return m
         for m in result.matches:
             if _is_actionable(m):
                 return m
@@ -485,7 +603,7 @@ class LocatorEngine:
                 f"{verb}('{selector}'): index {index} was asked for and {what}. The page is at {result.url}.",
                 {"verb": verb, "selector": selector, "index": index, "matchCount": result.total, "engine": result.engine, "url": result.url},
             )
-        chosen = self._pick(result, index)
+        chosen = self._pick(result, index, selector)
         if chosen is None or not _is_actionable(chosen):
             raise actionability_error(verb, selector, result, chosen if chosen is not None else self._best(result, index), elapsed_ms)
         return chosen
@@ -747,6 +865,27 @@ class LocatorEngine:
                     break
                 actual = nxt.get("value")
                 verified = actual == value
+
+            # ``strict=True`` turns a mismatch into an exception. Off by
+            # default because a masked field legitimately rewrites what was
+            # typed, which leaves a dropped character visible only in
+            # ``verified``. The values stay out of the error, since this is
+            # the path a password takes.
+            if verified is False and opts.get("strict", False) is True:
+                got = actual or ""
+                first = 0
+                while first < len(got) and first < len(value) and got[first] == value[first]:
+                    first += 1
+                raise AutomationError(
+                    "TIMEOUT",
+                    f"fill('{selector}', strict): the field holds {len(got)} character(s) after typing, expected "
+                    f"{len(value)}, first difference at index {first}. The keys were delivered; the page did not "
+                    "end up with the value.",
+                    {
+                        "selector": selector, "index": chosen.index, "delivered": True, "verified": False,
+                        "expectedLength": len(value), "actualLength": len(got), "firstMismatchAt": first,
+                    },
+                )
 
         return FillResult(
             ok=True, ref=ref, match_count=result.total, index=chosen.index, mode=mode,

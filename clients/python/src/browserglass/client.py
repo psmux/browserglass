@@ -1399,6 +1399,16 @@ class AutomationClient:
         return await self._run("click", target_id, ["evaluate", "control"], True, args, True, fn)
 
     async def fill(self, selector: str, value: str, **opts: Any) -> FillResult:
+        """Clicks the field, clears it, types ``value`` as real key events
+        and reads it back.
+
+        Check ``verified`` on the result. A mismatch does not raise by
+        default, because a masked field (a phone number coming back as
+        "(555) 010-9999") legitimately rewrites what was typed. That also
+        means a dropped character comes back as ``verified=False`` with no
+        exception. Pass ``strict=True`` to raise ``TIMEOUT`` on any
+        mismatch; use it for passwords and for fields the page should not
+        reformat."""
         target_id = self._target_id
 
         async def fn() -> FillResult:

@@ -70,6 +70,7 @@ class FakeRuntime:
         self.role_calls = []
         self.resolve_calls = []
         self.wait_calls = []
+        self.wait_errors = []
         self.evaluations = []
 
     async def evaluate_function(self, target_id, source, args, timeout_ms, *, world):
@@ -89,6 +90,8 @@ class FakeRuntime:
             return self.resolve_replies.pop(0)
         if source == WAIT_SCRIPT:
             self.wait_calls.append(args[0])
+            if self.wait_errors:
+                raise self.wait_errors.pop(0)
             return self.wait_replies.pop(0)
         if source == READ_SCRIPT:
             return self.read_replies.pop(0)
@@ -121,7 +124,9 @@ class FakeRuntime:
 
     async def query_and_stamp_by_role(self, target_id, role, name, timeout_ms):
         self.role_calls.append((target_id, role, name, timeout_ms))
-        return self.role_replies.pop(0)
+        # The last scripted answer repeats, since a role= wait asks again
+        # until its deadline.
+        return self.role_replies.pop(0) if len(self.role_replies) > 1 else self.role_replies[0]
 
 
 def wait_success(match_list, **kw):
@@ -238,15 +243,75 @@ async def test_wait_for_role_matching_nothing_and_state_detached_succeeds_immedi
 
 
 @pytest.mark.asyncio
-async def test_wait_for_role_matching_nothing_and_state_visible_times_out_immediately():
+async def test_wait_for_role_matching_nothing_and_state_visible_polls_then_times_out():
+    """It used to fail at once, after 0 checks. It now polls the
+    accessibility tree until the deadline, like any selector that matches
+    nothing yet."""
     rt = FakeRuntime()
     rt.role_replies.append({"attr": None})
     engine = LocatorEngine(rt)
 
     with pytest.raises(AutomationError) as excinfo:
-        await engine.wait_for("t1", "role=button", {"state": "visible"})
+        await engine.wait_for("t1", "role=button", {"state": "visible", "timeout_ms": 1000})
     assert excinfo.value.code == "NOT_FOUND"
     assert rt.wait_calls == []
+    assert len(rt.role_calls) > 1
+    assert excinfo.value.details["checks"] == len(rt.role_calls)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_role_keeps_polling_until_the_element_appears():
+    rt = FakeRuntime()
+    rt.role_replies.extend([{"attr": None}, {"attr": None}, {"attr": "data-bgls-ax-late"}])
+    rt.wait_replies.append(wait_success([make_match()]))
+    engine = LocatorEngine(rt)
+
+    result = await engine.wait_for("t1", 'role=button[name="Late one"]', {"timeout_ms": 5000})
+    assert result.total == 1
+    assert len(rt.role_calls) == 3
+    assert result.checks == 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_role_requeries_when_a_slice_times_out():
+    rt = FakeRuntime()
+    rt.role_replies.extend([{"attr": "data-bgls-ax-a"}, {"attr": "data-bgls-ax-b"}])
+    rt.wait_replies.append({"timedOut": True, "result": make_wire_resolve([]), "waitedMs": 1000, "checks": 10, "wakes": 0})
+    rt.wait_replies.append(wait_success([make_match()]))
+    engine = LocatorEngine(rt)
+
+    result = await engine.wait_for("t1", "role=button", {"timeout_ms": 5000})
+    assert result.total == 1
+    assert len(rt.role_calls) == 2
+    assert rt.wait_calls[0]["deadlineMs"] <= 1000
+
+
+@pytest.mark.asyncio
+async def test_wait_for_keeps_waiting_through_a_navigation():
+    rt = FakeRuntime()
+    rt.wait_errors.extend([
+        AutomationError("PROTOCOL_ERROR", "Inspected target navigated or closed"),
+        RuntimeError("Execution context was destroyed."),
+    ])
+    rt.wait_replies.append(wait_success([make_match()]))
+    engine = LocatorEngine(rt)
+
+    result = await engine.wait_for("t1", "#flash", {"timeout_ms": 5000})
+    assert result.total == 1
+    assert len(rt.wait_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_does_not_retry_an_error_that_is_not_a_navigation():
+    rt = FakeRuntime()
+    rt.wait_errors.append(AutomationError("TARGET_CLOSED", "Inspected target navigated or closed"))
+    engine = LocatorEngine(rt)
+    with pytest.raises(AutomationError) as excinfo:
+        await engine.wait_for("t1", "#flash", {"timeout_ms": 5000})
+    assert excinfo.value.code == "TARGET_CLOSED"
+    rt.wait_errors.append(RuntimeError("boom"))
+    with pytest.raises(RuntimeError):
+        await engine.wait_for("t1", "#flash", {"timeout_ms": 5000})
 
 
 def test_parse_role_value_accepts_bare_role():
@@ -515,3 +580,26 @@ def test_parse_selector_accepts_chained_xpath():
     segments = parse_selector("input#first >> xpath=ancestor::label[1]")
     assert segments[0].engine == "css"
     assert segments[1].engine == "xpath"
+
+
+@pytest.mark.asyncio
+async def test_click_partial_text_prefers_the_whole_text_match():
+    rt = FakeRuntime()
+    heading = make_match(index=0, ref="bg_0", tagName="h4", text="Welcome to the Secure Area. When you are done click logout below.", center={"x": 300, "y": 100})
+    link = make_match(index=1, ref="bg_1", tagName="i", text="Logout", center={"x": 80, "y": 200})
+    rt.wait_replies.append(wait_success([heading, link]))
+    engine = LocatorEngine(rt)
+    result = await engine.click("t1", "text=Logout")
+    assert rt.clicks[0][1:3] == (80, 200)
+    assert result.index == 1
+
+
+@pytest.mark.asyncio
+async def test_click_partial_text_keeps_document_order_without_a_whole_text_match():
+    rt = FakeRuntime()
+    a = make_match(index=0, ref="bg_0", text="Log out now", center={"x": 1, "y": 1})
+    b = make_match(index=1, ref="bg_1", text="Please log out", center={"x": 2, "y": 2})
+    rt.wait_replies.append(wait_success([a, b]))
+    engine = LocatorEngine(rt)
+    await engine.click("t1", "text=log out")
+    assert rt.clicks[0][1:3] == (1, 1)
