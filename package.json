@@ -22,7 +22,7 @@
     "clean": "pnpm -r --parallel exec rimraf dist .tsbuildinfo",
     "changeset": "changeset",
     "check:packed": "node scripts/check-packed-manifests.mjs",
-    "bgls": "bgls",
+    "bgls": "node packages/cli/dist/bin.mjs",
     "build:plugins": "npm --prefix plugins/plugin-video-export install --no-audit --no-fund && npm --prefix plugins/plugin-video-export run build"
   },
   "devDependencies": {

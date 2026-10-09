@@ -177,6 +177,20 @@ describe('buildLaunchArgs, base composition', () => {
     expect(withFlag.args).toContain('--no-sandbox');
   });
 
+  it('sizes the window from the spec viewport in headless mode too, so the viewport is honoured', () => {
+    const built = buildLaunchArgs({
+      spec: fixtureBrowserSpec({
+        headless: 'new',
+        viewport: { width: 1440, height: 900, deviceScaleFactor: 1 },
+        window: null,
+      }),
+      profilePath: 'p',
+      profileMode: 'persistent',
+      allowNoSandbox: false,
+    });
+    expect(built.args).toContain('--window-size=1440,900');
+  });
+
   it('adds --headless=new only for headless mode new, and never the legacy bare --headless spelling', () => {
     const headlessNew = buildLaunchArgs({
       spec: fixtureBrowserSpec({ headless: 'new' }),
