@@ -134,6 +134,28 @@ describe('HostRuntime.launch, real Chrome', () => {
   }, 60_000);
 });
 
+describe('HostRuntime.dispose, killOnShutdown, real Chrome', () => {
+  it('ends every browser it still tracks, found by profile directory', async () => {
+    // The backstop a gateway shutdown falls back to for anything its own
+    // release pass missed. It used to kill only the remembered pid's tree,
+    // which on Windows can miss the process that actually holds the
+    // profile (see terminate.ts).
+    const { profileRoot, ...rest } = freshWorkspace();
+    const { runtime } = await createHostRuntime({
+      nodeId: 'nod_test',
+      profileRoot,
+      ...rest,
+      killOnShutdown: true,
+    });
+    const handle = await runtime.launch(fixtureLaunchRequest(profileRoot));
+    expect(chromeProcsForDataDir(handle.profilePath).length).toBeGreaterThan(0);
+
+    await runtime.dispose();
+
+    expect(chromeProcsForDataDir(handle.profilePath)).toEqual([]);
+  }, 90_000);
+});
+
 describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', () => {
   // Both refusal tests below throw before this runtime ever touches
   // Chrome binary discovery or spawns a process (`resolveRequiredStealthProfile`

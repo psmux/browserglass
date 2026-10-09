@@ -250,6 +250,10 @@ export const serveCommand = defineCommand({
         });
       gateway = await buildEmbeddedGateway({
         dataDir,
+        // A clean shutdown releases every instance anyway; this makes the
+        // runtime's own dispose end whatever that release could not reach,
+        // rather than leave it running with nothing left to manage it.
+        killOnShutdown: true,
         ...(runtimeKinds.includes('remote') ? { runtime: 'remote' as const, remoteEndpoints } : {}),
         listenHost: host,
         listenPort: port,
@@ -306,14 +310,25 @@ export const serveCommand = defineCommand({
     const shutdown = (signal: string): void => {
       if (shuttingDown) return;
       shuttingDown = true;
+      // The same Ctrl+C that reached this process often ends whatever was
+      // reading its output (a `tee`, a wrapper script), and the next log
+      // line then fails with EPIPE. Unhandled, that error killed the
+      // process halfway through shutdown with every browser still up.
+      for (const stream of [process.stdout, process.stderr]) stream.on('error', () => undefined);
       printer.info(`received ${signal}, shutting down`);
       gateway
         .close()
         .catch(() => undefined)
         .finally(() => process.exit(0));
     };
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
+    // SIGBREAK is Ctrl+Break in a Windows console, and SIGHUP is what Node
+    // raises on Windows when the console window is closed (the process
+    // then has a few seconds before Windows ends it). Both used to fall
+    // through to the default handler, which exits at once and leaves
+    // every launched Chrome running.
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGBREAK', 'SIGHUP'] as const) {
+      process.on(signal, () => shutdown(signal));
+    }
 
     // Keep the process alive; the http server's own open listening socket
     // already does this, but an explicit never-resolving promise makes the
