@@ -8,7 +8,7 @@
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, sep } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Logger } from '../../src/config/logger.js';
 import {
@@ -110,7 +110,13 @@ describe('lifecycle', () => {
     expect(path.endsWith(`${'passwd'}`)).toBe(true);
     // And it is genuinely inside the staging root, not two levels up.
     expect(path.startsWith(root)).toBe(true);
-    expect(existsSync(join(root, '..', '..', '..', 'etc', 'passwd'))).toBe(false);
+    // Checked by shape, not by probing `<root>/../../../etc/passwd`: on
+    // Linux the temp root sits directly under `/tmp`, so that walk clamps
+    // at `/` and lands on the real `/etc/passwd`, which always exists.
+    expect(relative(root, path).split(sep)).toEqual([
+      expect.stringMatching(/^[0-9a-f]{32}$/),
+      'passwd',
+    ]);
   });
 
   it('accepts a zero-byte file', async () => {
