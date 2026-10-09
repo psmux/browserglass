@@ -14,6 +14,9 @@ importers:
       '@biomejs/biome':
         specifier: ^1.9.4
         version: 1.9.4
+      '@browserglass/automation':
+        specifier: workspace:*
+        version: link:packages/automation
       '@browserglass/cli':
         specifier: workspace:*
         version: link:packages/cli
