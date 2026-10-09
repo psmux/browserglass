@@ -740,6 +740,11 @@ export const AUTOMATION_MCP_TOOLS: readonly Tool[] = Object.freeze([
           description:
             'Read the value back after typing and report whether it matches. Default true.',
         },
+        strict: {
+          type: 'boolean',
+          description:
+            'Throw when the value read back does not match, instead of returning verified: false. Default false. Use it for passwords and any field the page should not reformat.',
+        },
         scroll: {
           type: 'boolean',
           description: 'Scroll the element into view before measuring. Default true.',
@@ -2244,6 +2249,7 @@ async function callFill(
     const clear = args['clear'];
     const click = args['click'];
     const verify = args['verify'];
+    const strict = args['strict'];
     const scroll = args['scroll'];
     const result = await client.fill(selector, value, {
       ...(typeof index === 'number' ? { index } : {}),
@@ -2253,6 +2259,7 @@ async function callFill(
       ...(typeof clear === 'boolean' ? { clear } : {}),
       ...(typeof click === 'boolean' ? { click } : {}),
       ...(typeof verify === 'boolean' ? { verify } : {}),
+      ...(typeof strict === 'boolean' ? { strict } : {}),
       ...(typeof scroll === 'boolean' ? { scroll } : {}),
     });
     const verifiedNote =

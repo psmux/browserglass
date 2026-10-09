@@ -748,6 +748,27 @@ class LocatorEngine:
                 actual = nxt.get("value")
                 verified = actual == value
 
+            # ``strict=True`` turns a mismatch into an exception. Off by
+            # default because a masked field legitimately rewrites what was
+            # typed, which leaves a dropped character visible only in
+            # ``verified``. The values stay out of the error, since this is
+            # the path a password takes.
+            if verified is False and opts.get("strict", False) is True:
+                got = actual or ""
+                first = 0
+                while first < len(got) and first < len(value) and got[first] == value[first]:
+                    first += 1
+                raise AutomationError(
+                    "TIMEOUT",
+                    f"fill('{selector}', strict): the field holds {len(got)} character(s) after typing, expected "
+                    f"{len(value)}, first difference at index {first}. The keys were delivered; the page did not "
+                    "end up with the value.",
+                    {
+                        "selector": selector, "index": chosen.index, "delivered": True, "verified": False,
+                        "expectedLength": len(value), "actualLength": len(got), "firstMismatchAt": first,
+                    },
+                )
+
         return FillResult(
             ok=True, ref=ref, match_count=result.total, index=chosen.index, mode=mode,
             actual=actual, verified=verified, elapsed_ms=time.time() * 1000 - started,

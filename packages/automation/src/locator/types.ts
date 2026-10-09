@@ -353,6 +353,15 @@ export interface LocatorFillOptions {
   click?: boolean;
   /** Read the value back after typing and report whether it matches. Default true; the read is one evaluate and is worth it for the same reason `click`'s `verify` is. */
   verify?: boolean;
+  /**
+   * Throw `TIMEOUT` when the read back value does not equal `value`,
+   * instead of returning `verified: false`. Default false, because a masked
+   * or reformatting field legitimately changes what was typed. Turn it on
+   * for passwords and for any field the page should not rewrite: without it
+   * a dropped character is only visible in `verified`. Ignored when
+   * `verify: false`.
+   */
+  strict?: boolean;
   scroll?: boolean;
 }
 
@@ -365,7 +374,11 @@ export interface FillResult {
   mode: FillMode;
   /** What the field held when it was read back, or `null` when `verify: false`. */
   actual: string | null;
-  /** Whether `actual` equals the value asked for. `null` when `verify: false`. */
+  /**
+   * Whether `actual` equals the value asked for. `null` when `verify: false`.
+   * `false` is NOT an exception unless `strict: true` was passed, so check
+   * it: `ok` only says the keys were delivered.
+   */
   verified: boolean | null;
   elapsedMs: number;
 }

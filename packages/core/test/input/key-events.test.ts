@@ -42,6 +42,86 @@ describe('vkForKey', () => {
   it('returns 0 for anything unrecognised', () => {
     expect(vkForKey('Unidentified', 'Unidentified')).toBe(0);
   });
+
+  // `#` used to resolve to 0x23, which is VK_END, so Chrome ran End and
+  // dropped the character. Same for `!` (PageUp), `$` (Home), `(` (ArrowDown).
+  const US_CODE: Record<string, string> = {
+    ' ': 'Space',
+    '`': 'Backquote',
+    '~': 'Backquote',
+    '-': 'Minus',
+    _: 'Minus',
+    '=': 'Equal',
+    '+': 'Equal',
+    '[': 'BracketLeft',
+    '{': 'BracketLeft',
+    ']': 'BracketRight',
+    '}': 'BracketRight',
+    '\\': 'Backslash',
+    '|': 'Backslash',
+    ';': 'Semicolon',
+    ':': 'Semicolon',
+    "'": 'Quote',
+    '"': 'Quote',
+    ',': 'Comma',
+    '<': 'Comma',
+    '.': 'Period',
+    '>': 'Period',
+    '/': 'Slash',
+    '?': 'Slash',
+    '!': 'Digit1',
+    '@': 'Digit2',
+    '#': 'Digit3',
+    $: 'Digit4',
+    '%': 'Digit5',
+    '^': 'Digit6',
+    '&': 'Digit7',
+    '*': 'Digit8',
+    '(': 'Digit9',
+    ')': 'Digit0',
+  };
+  const usCode = (ch: string): string => {
+    if (/^[a-z]$/i.test(ch)) return `Key${ch.toUpperCase()}`;
+    if (/^[0-9]$/.test(ch)) return `Digit${ch}`;
+    return US_CODE[ch] ?? '';
+  };
+  const printable = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i));
+  const controlVks = new Set([
+    8, 9, 13, 16, 17, 18, 19, 20, 27, 33, 34, 35, 36, 37, 38, 39, 40, 45, 46, 91, 93,
+  ]);
+
+  it('never resolves a printable ASCII character to a control key VK, with or without a code', () => {
+    for (const ch of printable) {
+      for (const code of [usCode(ch), '']) {
+        const vk = vkForKey(ch, code);
+        expect(controlVks.has(vk), `${JSON.stringify(ch)} code ${code} gave VK ${vk}`).toBe(false);
+        expect(vk, `${JSON.stringify(ch)} code ${code}`).not.toBe(0);
+      }
+    }
+  });
+
+  it('gives a shifted symbol the VK of the key it is typed with', () => {
+    expect(vkForKey('#', 'Digit3')).toBe(0x33);
+    expect(vkForKey('#', '')).toBe(0x33);
+    expect(vkForKey('!', 'Digit1')).toBe(0x31);
+    expect(vkForKey('(', 'Digit9')).toBe(0x39);
+    expect(vkForKey('?', 'Slash')).toBe(191);
+    expect(vkForKey('"', 'Quote')).toBe(222);
+    expect(vkForKey('~', '')).toBe(192);
+  });
+
+  it('builds a keyDown that carries every printable ASCII character as its own text', () => {
+    for (const ch of printable) {
+      const p = buildKeyEvent({ kind: 'down', key: ch, code: usCode(ch), modifiers: 0, text: ch });
+      expect(p?.text).toBe(ch);
+      expect(controlVks.has(p?.windowsVirtualKeyCode ?? 0)).toBe(false);
+    }
+  });
+
+  it('leaves non ASCII characters with no VK rather than guessing one', () => {
+    expect(vkForKey('\u00e9', '')).toBe(0);
+    expect(vkForKey('\u{1F600}', '')).toBe(0);
+  });
 });
 
 describe('isNonTextKey', () => {

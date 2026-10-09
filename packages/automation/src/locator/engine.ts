@@ -1572,6 +1572,33 @@ export class LocatorEngine {
         actual = next.value ?? null;
         verified = actual === value;
       }
+
+      if (verified === false && opts?.strict === true) {
+        // The values themselves stay out of the error: this is the path a
+        // password takes. Lengths and the first differing position are
+        // enough to tell a dropped character from a reformatted field.
+        const got = actual ?? '';
+        let firstMismatchAt = 0;
+        while (
+          firstMismatchAt < got.length &&
+          firstMismatchAt < value.length &&
+          got[firstMismatchAt] === value[firstMismatchAt]
+        )
+          firstMismatchAt += 1;
+        throw new AutomationError(
+          'TIMEOUT',
+          `fill('${selector}', strict): the field holds ${got.length} character(s) after typing, expected ${value.length}, first difference at index ${firstMismatchAt}. The keys were delivered; the page did not end up with the value.`,
+          {
+            selector,
+            index: chosen.index,
+            delivered: true,
+            verified: false,
+            expectedLength: value.length,
+            actualLength: got.length,
+            firstMismatchAt,
+          },
+        );
+      }
     }
 
     return {

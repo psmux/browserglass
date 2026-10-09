@@ -104,6 +104,17 @@ caring about open and filter on `keydown`. It also stands down mid-word
 when a person takes the browser, and tells you which character it stopped
 on.
 
+`fill` reads the field back afterwards and reports `verified`. A mismatch
+does not throw unless you pass `strict: true`, because a masked field (a
+phone number that comes back as "(555) 010-9999") rewrites what you typed
+on purpose. The catch is that a character the page dropped also comes back
+as `ok: true, verified: false`. Check `verified`, or pass `strict: true`
+for passwords and any field you do not expect the page to reformat:
+
+```ts
+await client.fill('#password', secret, { strict: true }); // throws TIMEOUT on a mismatch
+```
+
 Beyond `click`/`fill`/`resolve`, the locator surface also has `hover()`
 (moves the pointer, for a `:hover` menu with nothing to click),
 `scrollToText()` and `scrollContainer()` (scroll a virtualised list or a

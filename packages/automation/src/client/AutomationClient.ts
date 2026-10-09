@@ -2499,6 +2499,15 @@ export class AutomationClient {
    *
    * The value is read back afterwards and reported as `verified`, for the
    * same reason `click` has a `verify`: delivery is not success.
+   *
+   * CHECK `verified`. A mismatch does NOT throw by default, because a
+   * masked or reformatting field (a phone number coming back as
+   * "(555) 010-9999") is a legitimate result the caller has to look at.
+   * The cost of that default is that a dropped character also comes back
+   * as `ok: true, verified: false`, and a login whose password lost a
+   * character fails without an exception. Pass `strict: true` to make any
+   * mismatch throw `TIMEOUT` instead; that is the right setting for
+   * credentials and for any field you do not expect the page to rewrite.
    */
   async fill(selector: string, value: string, opts?: LocatorFillOptions): Promise<FillResult> {
     const targetId = this._targetId;

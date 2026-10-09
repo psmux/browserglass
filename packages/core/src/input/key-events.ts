@@ -63,13 +63,23 @@ export const VK_BY_KEY: Readonly<Record<string, number>> = Object.freeze({
 
 /**
  * Resolves the `windowsVirtualKeyCode` (and `nativeVirtualKeyCode`, CDP
- * expects them equal for this relay use case) for one key, by four
+ * expects them equal for this relay use case) for one key, by these
  * derivation rules, in order:
  * a direct {@link VK_BY_KEY} hit; `F1` to `F24` as `111 + n`; a single
- * printable ASCII character as its uppercase code; then the `code`-based
- * fallbacks for non-US layouts (`Digit3` gives `0x33`, `KeyQ` gives `Q`'s
- * char code, `Numpad7` gives `0x67`). Anything else is `0`, which CDP treats
- * as "no virtual key".
+ * ASCII letter or digit as its uppercase code; then the `code`-based
+ * fallbacks (`Digit3` gives `0x33`, `KeyQ` gives `Q`'s char code,
+ * `Numpad7` gives `0x67`, `Slash` gives `0xBF` and so on for the other
+ * punctuation keys); then, for a shifted US symbol sent with no usable
+ * `code`, the VK of the key it sits on. Anything else is `0`, which CDP
+ * treats as "no virtual key" and which still types fine, because the
+ * keyDown carries the character as `text`.
+ *
+ * The letter-or-digit restriction on the char code rule matters. Windows
+ * virtual key codes are not ASCII: below `0x30` they name control keys.
+ * Taking a symbol's char code as its VK sent `#` (0x23) as End, `!` (0x21)
+ * as PageUp, `$` as Home and `(` as ArrowDown. Chrome ran the editing
+ * command for that key and then suppressed the character, so the symbol
+ * vanished from the field and the caret jumped somewhere else.
  */
 export function vkForKey(key: string, code: string): number {
   const direct = VK_BY_KEY[key];
@@ -80,12 +90,8 @@ export function vkForKey(key: string, code: string): number {
   if (fMatch) {
     return 111 + Number(fMatch[1]);
   }
-  if ([...key].length === 1) {
-    const upper = key.toUpperCase();
-    const codePoint = upper.codePointAt(0);
-    if (codePoint !== undefined && codePoint >= 0x20 && codePoint <= 0x7e) {
-      return codePoint;
-    }
+  if (/^[A-Za-z0-9]$/.test(key)) {
+    return key.toUpperCase().charCodeAt(0);
   }
   const digitMatch = /^Digit([0-9])$/.exec(code);
   if (digitMatch) {
@@ -99,8 +105,53 @@ export function vkForKey(key: string, code: string): number {
   if (numpadMatch) {
     return 0x60 + Number(numpadMatch[1]);
   }
-  return 0;
+  const oem = VK_BY_CODE[code];
+  if (oem !== undefined) {
+    return oem;
+  }
+  return VK_BY_SHIFTED_KEY[key] ?? 0;
 }
+
+/** The VK for each US punctuation key, by its DOM `code`. Covers the shifted symbols on those keys too, since they share a code. */
+const VK_BY_CODE: Readonly<Record<string, number>> = Object.freeze({
+  Space: 32,
+  Semicolon: 186,
+  Equal: 187,
+  Comma: 188,
+  Minus: 189,
+  Period: 190,
+  Slash: 191,
+  Backquote: 192,
+  BracketLeft: 219,
+  Backslash: 220,
+  BracketRight: 221,
+  Quote: 222,
+});
+
+/** US layout shifted symbols, for a key event that arrives with no usable `code`: the VK of the key the symbol is typed with. */
+const VK_BY_SHIFTED_KEY: Readonly<Record<string, number>> = Object.freeze({
+  ')': 0x30,
+  '!': 0x31,
+  '@': 0x32,
+  '#': 0x33,
+  $: 0x34,
+  '%': 0x35,
+  '^': 0x36,
+  '&': 0x37,
+  '*': 0x38,
+  '(': 0x39,
+  ':': 186,
+  '+': 187,
+  '<': 188,
+  _: 189,
+  '>': 190,
+  '?': 191,
+  '~': 192,
+  '{': 219,
+  '|': 220,
+  '}': 221,
+  '"': 222,
+});
 
 /**
  * Keys that must never carry `text`, because they have no character

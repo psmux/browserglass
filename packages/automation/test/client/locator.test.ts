@@ -1198,6 +1198,23 @@ describe('fill', () => {
     expect(r.actual).toBe('(555) 010-9999');
   });
 
+  it('throws on a value that did not stick when strict is set, without echoing the value', async () => {
+    const { engine, rt } = engineWith();
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([editable()]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+    // The live failure: the trailing '!' of a password never reached the field.
+    rt.readReplies = [{ found: true, value: 'SuperSecretPassword' }];
+    const err = await engine
+      .fill('t1', '#password', 'SuperSecretPassword!', { strict: true })
+      .catch((e: unknown) => e);
+    expect(err).toMatchObject({
+      code: 'TIMEOUT',
+      details: { verified: false, expectedLength: 20, actualLength: 19, firstMismatchAt: 19 },
+    });
+    expect(String((err as Error).message)).not.toContain('SuperSecret');
+  });
+
   it('refuses a match that is not editable, naming the element it actually found', async () => {
     const { engine, rt } = engineWith();
     rt.waitReplies = [
