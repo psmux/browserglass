@@ -71,7 +71,7 @@ afterEach(async () => {
   const running = chrome;
   chrome = undefined;
   await running?.close();
-  if (savedEnv === undefined) delete process.env['BGLS_REMOTE_NO_EMULATION'];
+  if (savedEnv === undefined) Reflect.deleteProperty(process.env, 'BGLS_REMOTE_NO_EMULATION');
   else process.env['BGLS_REMOTE_NO_EMULATION'] = savedEnv;
 });
 
