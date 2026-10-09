@@ -53,7 +53,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative as relativePath, resolve as resolvePath } from 'node:path';
+import { dirname, join, relative, resolve as resolvePath } from 'node:path';
 
 // ── Plugin source: parsing and refusal ─────────────────────────────────
 
@@ -464,16 +464,19 @@ export function fetchNpmPackage(spec: string): FetchedPlugin {
 
     const tgzPath = join(packDir, filename);
     try {
-      // GNU tar reads a "host:file" -f argument as a remote tape, and a
-      // Windows absolute path's drive letter ("C:\…") parses as exactly
-      // that host prefix. GNU tar's --force-local turns that off, but
-      // bsdtar (macOS, and the tar.exe Windows ships in System32) refuses
-      // the flag outright. So no flag and no absolute path: tar runs with
-      // `cwd` set to the destination (`-C <dir>` has the same colon
-      // problem) and reads the tarball by a path relative to it. Both
-      // directories come from `tmpdir()`, so that path never carries a
-      // drive letter, and every tar reads it the same way.
-      execFileSync('tar', ['-xzf', relativePath(extractDir, tgzPath)], {
+      // The archive is named relative to the extract directory, never by
+      // its absolute path. GNU tar reads a colon in an -f argument as a
+      // "host:file" remote tape, so a Windows path like "C:\..." would
+      // send it looking for a host named "C". GNU tar's --force-local
+      // avoids that, but the tar that ships with Windows itself
+      // (System32\tar.exe, bsdtar) rejects --force-local outright, and
+      // which of the two comes first on PATH varies from one machine to
+      // the next. Both temp directories come from the same tmpdir(), so
+      // the relative path never crosses a drive and never carries a
+      // colon, and every tar accepts it. The destination is the child
+      // process's own `cwd` for the same reason: no path for tar to
+      // misparse.
+      execFileSync('tar', ['-xzf', relative(extractDir, tgzPath)], {
         cwd: extractDir,
         timeout: TAR_TIMEOUT_MS,
         windowsHide: true,

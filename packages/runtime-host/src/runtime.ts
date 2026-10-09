@@ -57,11 +57,31 @@ interface LiveEntry {
   exitListeners: Set<(info: ExitInfo) => void>;
 }
 
-/** How much of a launching Chrome's stderr a failed launch quotes back. The tail is the part that names the reason. */
-const LAUNCH_STDERR_BYTES = 4096;
+/** How long a reaped orphan gets to exit on SIGTERM before the reap escalates to SIGKILL. */
+const ORPHAN_SIGTERM_GRACE_MS = 3000;
 
-/** How long a stale Chrome found on the launch path gets to exit on SIGTERM before the terminate ladder escalates to SIGKILL. */
-const ORPHAN_REAP_GRACE_MS = 5000;
+/**
+ * Waits until no browser main process holds `profilePath`, escalating to
+ * SIGKILL after {@link ORPHAN_SIGTERM_GRACE_MS}. Without this the launch
+ * that follows a reap races the dying process for the profile's
+ * SingletonLock, and on Linux the dying process usually wins. Returns
+ * quietly at `deadlineAt`: whatever still holds the profile then is
+ * reported by the launch's own CDP wait, with better context than this
+ * could give.
+ */
+async function waitForProfileRelease(profilePath: string, deadlineAt: number): Promise<void> {
+  const escalateAt = Date.now() + ORPHAN_SIGTERM_GRACE_MS;
+  let escalated = false;
+  while (Date.now() < deadlineAt) {
+    const holders = await chromeProcsForDataDirAsync(profilePath, { maxAgeMs: 0 });
+    if (holders.length === 0) return;
+    if (!escalated && Date.now() >= escalateAt) {
+      escalated = true;
+      await Promise.all(holders.map((p) => killProcessTree(p.pid, 'SIGKILL')));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
 
 /** Everything {@link HostRuntime}'s handle construction needs beyond what `LaunchedBrowser` itself carries, kept out of the public handle shape rather than smuggled onto it. */
 interface HandleMeta {
@@ -70,6 +90,9 @@ interface HandleMeta {
   headless: HeadlessMode;
   labels: Readonly<Record<string, string>>;
 }
+
+/** How much of a launching Chrome's stderr a failed launch quotes back. The tail is the part that names the reason. */
+const LAUNCH_STDERR_BYTES = 4096;
 
 /**
  * `@browserglass/runtime-host`'s `BrowserRuntime`. One instance per node
@@ -269,6 +292,20 @@ export class HostRuntime implements BrowserRuntime {
 
     await timed('reconcile', async () => {
       const preExisting = await chromeProcsForDataDirAsync(req.profile.path, { maxAgeMs: 0 });
+      // Pids this runtime still supervises. A process parented to us that
+      // is NOT in here is one we spawned and then let go of (a `'detach'`
+      // terminate, or a launch that failed after spawn). On POSIX its ppid
+      // stays this process for as long as we live, so `classifyChromeProcess`
+      // calls it `ownedByUs`, and leaving it alone means the new Chrome
+      // finds the profile's SingletonLock held, forwards its arguments to
+      // the old process and exits, and this launch never sees a
+      // DevToolsActivePort. Windows hid this because Chrome's launch handoff
+      // leaves the browser main parented to a vanished pid, which classifies
+      // as `orphan` already.
+      const supervisedPids = new Set<number>();
+      for (const entry of this.live.values()) {
+        if (entry.handle.pid !== null) supervisedPids.add(entry.handle.pid);
+      }
       const toReap: number[] = [];
       for (const proc of preExisting) {
         const classification = classifyChromeProcess(proc, {
@@ -280,35 +317,16 @@ export class HostRuntime implements BrowserRuntime {
             preExisting.map((p) => p.pid),
           );
         }
-        // `ownedByUs` only says this process spawned it. One this runtime
-        // no longer tracks (a detached handle, or a browser an earlier
-        // HostRuntime in the same process left behind) is as stale as an
-        // orphan: the caller holds the lease on this profile. On macOS and
-        // Linux it has to go, because the new Chrome would find it holding
-        // the singleton lock, hand its arguments over, and exit, and
-        // DevToolsActivePort (unlinked just below) would never come back.
-        // Windows rarely sees this case, since Chrome there hands off to a
-        // second process whose parent is gone and so classifies as `orphan`.
         if (
           classification === 'orphan' ||
-          (classification === 'ownedByUs' && !this.isTrackedPid(proc.pid))
+          (classification === 'ownedByUs' && !supervisedPids.has(proc.pid))
         ) {
           toReap.push(proc.pid);
         }
       }
-      // Awaited to the end, not just signalled: a SIGTERMed Chrome still
-      // holds the singleton lock while it shuts down, which is the same
-      // handoff the loop above exists to prevent.
-      for (const pid of toReap) {
-        await terminateBrowser({
-          pid,
-          cdpWsUrl: null,
-          mode: 'graceful',
-          cdpCloseTimeoutMs: 0,
-          gracePeriodMs: ORPHAN_REAP_GRACE_MS,
-          profilePath: req.profile.path,
-          stopSupervision: () => {},
-        });
+      if (toReap.length > 0) {
+        await Promise.all(toReap.map((pid) => killProcessTree(pid, 'SIGTERM')));
+        await waitForProfileRelease(req.profile.path, req.deadlineAt);
       }
       unlinkStaleDevToolsActivePort(req.profile.path);
 
@@ -560,14 +578,6 @@ export class HostRuntime implements BrowserRuntime {
       },
     };
     return handle;
-  }
-
-  /** `true` when `pid` is the browser of a handle this runtime is still supervising. */
-  private isTrackedPid(pid: number): boolean {
-    for (const entry of this.live.values()) {
-      if (entry.handle.pid === pid) return true;
-    }
-    return false;
   }
 
   private registerLive(
