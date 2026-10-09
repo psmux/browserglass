@@ -487,6 +487,14 @@ export interface ManagedSessionOptions {
    * error.
    */
   readonly recordingsDir?: string;
+  /**
+   * The CSS viewport every page of this instance is forced to with
+   * `Emulation.setDeviceMetricsOverride` (`factory.ts`'s
+   * `resolveViewportHook`), when one is. Read back as the page's real
+   * viewport instead of `Page.getLayoutMetrics`, which leaves out a
+   * scrollbar. Omitted when no override is applied.
+   */
+  readonly emulatedViewport?: { readonly width: number; readonly height: number };
 }
 
 /**
@@ -897,6 +905,9 @@ export class ManagedSession {
   private readonly downloadDir: string | undefined;
   /** See {@link ManagedSessionOptions.recordingsDir}. */
   private readonly recordingsDir: string | undefined;
+  private readonly emulatedViewport:
+    | { readonly width: number; readonly height: number }
+    | undefined;
   /**
    * Every recording this session has ever started, keyed by `recordingId`,
    * kept after `stopRecording()` (with `stoppedAtMs` set) so
@@ -962,6 +973,7 @@ export class ManagedSession {
     this.downloadStore = opts.downloadStore;
     this.downloadDir = opts.downloadDir;
     this.recordingsDir = opts.recordingsDir;
+    this.emulatedViewport = opts.emulatedViewport;
 
     this.session = new Session({
       id: this.sessionId as never,
@@ -1762,6 +1774,14 @@ export class ManagedSession {
   ): Promise<{ width: number; height: number } | null> {
     try {
       const handle = await this.registry.attach(targetId as never);
+      // Every page of this instance has the spec viewport forced on it
+      // (`factory.ts`'s `resolveViewportHook`), so that size is exact. The
+      // layout metrics below exclude a scrollbar: a 390 wide page with a
+      // vertical scrollbar read as 375, the stream was scaled down to
+      // 376x814 instead of 390x844, and `capture()` reported a 3.12 device
+      // scale factor for a 3x page. The screencast covers the whole
+      // viewport, scrollbar included, which is what this size matches.
+      if (this.emulatedViewport && handle) return { ...this.emulatedViewport };
       const metrics = (await this.bridge.send('Page.getLayoutMetrics', {}, handle.id as never)) as {
         cssLayoutViewport?: { clientWidth: number; clientHeight: number };
         layoutViewport?: { clientWidth: number; clientHeight: number };

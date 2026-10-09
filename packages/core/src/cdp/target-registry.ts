@@ -1019,6 +1019,7 @@ export class TargetRegistryImpl implements TargetRegistry {
     const ctx: StealthTargetContext = {
       cdpSessionId: sessionId,
       targetId: target.cdpTargetId,
+      targetType: target.type,
       evaluate: (expression) => this.evaluateForStealth(sessionId, expression),
       send: (method, params) => this.bridge.send(method, params, sessionId as never),
     };
