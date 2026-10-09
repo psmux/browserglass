@@ -840,6 +840,28 @@ export class LocatorEngine {
           await this.rt.sleep(Math.min(pollMs, deadlineMs));
           continue;
         }
+        // The accessibility query is given what is left of the deadline as
+        // its own timeout, so on a page that is still loading it can be the
+        // thing that runs out. That is this wait timing out, and it is
+        // reported as one, naming what was last seen.
+        if (
+          err instanceof AutomationError &&
+          err.code === 'TIMEOUT' &&
+          Date.now() >= overallDeadline - WAIT_EVALUATE_MARGIN_MS
+        ) {
+          const observed: ResolveResult = lastObserved ?? {
+            ...emptyResult(selector, targetId),
+            engine: terminalEngine(segments),
+            segments: segments.length,
+          };
+          throw this.waitTimeoutError(
+            selector,
+            state,
+            observed,
+            { timedOut: true, result: null, waitedMs: Date.now() - started, checks, wakes },
+            Date.now() - started,
+          );
+        }
         throw err;
       }
 

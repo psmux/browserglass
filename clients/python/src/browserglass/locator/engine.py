@@ -411,6 +411,20 @@ class LocatorEngine:
                 if not out_of_time and is_transient_navigation_error(err):
                     await self._rt.sleep(min(poll_ms, deadline_ms))
                     continue
+                # The accessibility query runs with what is left of the
+                # deadline as its own timeout; when that is what ran out,
+                # report it as this wait timing out.
+                if (
+                    isinstance(err, AutomationError)
+                    and err.code == "TIMEOUT"
+                    and time.time() * 1000 >= overall_deadline - WAIT_EVALUATE_MARGIN_MS
+                ):
+                    observed = last_observed or replace(
+                        _empty_result(selector), engine=terminal_engine(segments), segments=len(segments)
+                    )
+                    raise self._wait_timeout_error(
+                        selector, state, observed, {"checks": checks, "wakes": wakes}, time.time() * 1000 - started
+                    )
                 raise
 
             if effective is None:
