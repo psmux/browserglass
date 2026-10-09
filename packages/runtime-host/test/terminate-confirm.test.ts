@@ -129,7 +129,13 @@ describe('terminateBrowser: the supervised pid is not reliably the process holdi
     // shape the coordinator's pid-tree evidence showed (parent gone,
     // orphan still alive). The second scan (after this ladder kills it)
     // comes back clean.
-    pidAliveMock.mockReturnValue(false);
+    // The orphan is alive until something kills it; the confirm loop
+    // cross checks every scan result against `pidAlive`.
+    let orphanAlive = true;
+    pidAliveMock.mockImplementation((pid) => pid === 9999 && orphanAlive);
+    killProcessTreeMock.mockImplementation((pid) => {
+      if (pid === 9999) orphanAlive = false;
+    });
     let scanCalls = 0;
     chromeProcsForDataDirAsyncMock.mockImplementation(async () => {
       scanCalls += 1;
@@ -146,7 +152,8 @@ describe('terminateBrowser: the supervised pid is not reliably the process holdi
   });
 
   it('throws, and never calls stopSupervision, when a process keeps holding the profile directory past the scan budget', async () => {
-    pidAliveMock.mockReturnValue(false);
+    // The supervised pid is gone, the straggler never dies.
+    pidAliveMock.mockImplementation((pid) => pid === 9999);
     // Every scan finds the same straggler still there: the profile
     // directory is never actually cleared within the budget.
     chromeProcsForDataDirAsyncMock.mockImplementation(async () => [straggler(9999)]);

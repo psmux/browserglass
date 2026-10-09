@@ -334,6 +334,7 @@ export class ProfileService {
     nodeId: string;
     holderPid?: number;
     ttlMs: number;
+    reclaimFromHolderInstanceId?: string;
   }): Promise<ProfileAcquireResult> {
     const leaseTtlMs = clamp(req.ttlMs, 10_000, 300_000);
     const resolved: ResolvedProfileSpec =
@@ -348,6 +349,9 @@ export class ProfileService {
       nodeId: req.nodeId,
       leaseTtlMs,
       ...(req.holderPid !== undefined ? { holderPid: req.holderPid } : {}),
+      ...(req.reclaimFromHolderInstanceId !== undefined
+        ? { reclaimFromHolderInstanceId: req.reclaimFromHolderInstanceId }
+        : {}),
     };
     return this.acquireResolved(acquireReq, resolved, resolved.key, leaseTtlMs, true);
   }
@@ -677,7 +681,13 @@ export class ProfileService {
         continue;
       }
       const now = this.clock.now();
-      const stealAt = liveLease.expiresAt + this.config.profileLeaseStealGraceMs;
+      // A holder the caller has shown to be abandoned (see
+      // `ProfileAcquireRequest.reclaimFromHolderInstanceId`) is stealable
+      // now. Everything below the time check still applies to it.
+      const reclaimNow =
+        req.reclaimFromHolderInstanceId !== undefined &&
+        liveLease.holderInstanceId === req.reclaimFromHolderInstanceId;
+      const stealAt = reclaimNow ? now : liveLease.expiresAt + this.config.profileLeaseStealGraceMs;
       if (now < stealAt || attempt >= maxStealAttempts) {
         throw profileErr(
           'E_PROFILE_BUSY',

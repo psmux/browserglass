@@ -121,6 +121,15 @@ export interface ProfileAcquireRequest {
   noWait?: boolean;
   /** Default 60000. */
   deadlineMs?: number;
+  /**
+   * An instance whose lease on this profile may be taken over now, without
+   * waiting for it to expire, because the caller has established that no
+   * process it can reach still owns that instance (a row left behind by a
+   * gateway that died). The steal path's corruption probe and its live
+   * singleton check still run, so a Chrome still holding the directory
+   * refuses the takeover.
+   */
+  reclaimFromHolderInstanceId?: string;
 }
 
 /**

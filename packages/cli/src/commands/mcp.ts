@@ -63,7 +63,18 @@ import {
   withLease,
 } from '../util/drive.js';
 import { EXIT_CODES } from '../util/exit.js';
-import { restCall } from '../util/rest.js';
+import { restCall, restSend } from '../util/rest.js';
+
+/**
+ * How long shutdown waits for the gateway to acknowledge its release
+ * requests before it exits anyway. Kept under the roughly two seconds an
+ * MCP host gives a child after closing its stdin, together with
+ * {@link SERVER_CLOSE_BUDGET_MS}.
+ */
+const RELEASE_SEND_BUDGET_MS = 1_500;
+
+/** How long shutdown waits for the MCP server, and with it every swarm member client, to close before releasing anyway. */
+const SERVER_CLOSE_BUDGET_MS = 500;
 
 /**
  * `DRIVING_CAPS` plus `evaluate`. More than half the manifest
@@ -157,13 +168,18 @@ export const mcpCommand = defineCommand({
     // the startup instance (never one named with --instance-id, which
     // somebody else owns) and every swarm member `acquire` below mints.
     const owned = new Set<string>();
-    const releasing = new Set<Promise<void>>();
-    const release = (instanceId: string): Promise<void> => {
+    // The `sent` stage (acknowledged by the gateway) of every release
+    // issued so far. Shutdown waits on these, not on the answers; see
+    // `shutdown` below.
+    const releasesSent = new Set<Promise<void>>();
+    const startRelease = (instanceId: string): Promise<void> => {
       if (!owned.delete(instanceId)) return Promise.resolve();
       // A plain release, not `force`: if a person is watching one of these
       // browsers the gateway leaves it running for them and says
       // `detached`, which is the right answer for a browser in use.
-      const done = restCall(connection, 'DELETE', `/v1/instances/${instanceId}`).then(
+      const call = restSend(connection, 'DELETE', `/v1/instances/${instanceId}`);
+      releasesSent.add(call.sent.catch(() => undefined));
+      return call.done.then(
         () => undefined,
         (err: unknown) => {
           logStderr(
@@ -171,10 +187,8 @@ export const mcpCommand = defineCommand({
           );
         },
       );
-      releasing.add(done);
-      void done.finally(() => releasing.delete(done));
-      return done;
     };
+    const release = (instanceId: string): Promise<void> => startRelease(instanceId);
 
     const explicitInstanceId = args['instance-id'] as string | undefined;
     let boundInstanceId: string;
@@ -273,13 +287,34 @@ export const mcpCommand = defineCommand({
       shuttingDown = true;
       logStderr(`bgls mcp: ${why}; releasing ${owned.size} instance(s) this server opened.`);
       client.close();
-      // Closes every swarm, whose members' instances reach `release`
-      // through `swarm.release`; anything left (the startup instance, a
-      // member of a swarm that never finished opening) is released here.
-      void server.close().catch(() => undefined);
+      // Closes every swarm. `createAutomationMcpServer` closes the member
+      // clients from `server.onclose`, which fires once the transport has
+      // closed (about 10 ms), so this is awaited, briefly, before the
+      // releases go out. A plain release is answered `detached` while one
+      // of the caller's own viewer sockets is still open on the gateway
+      // past its settle window, and that would leave the browser running.
+      const serverClosed = server.close().catch(() => undefined);
       void (async () => {
-        await Promise.allSettled([...releasing]);
-        await Promise.allSettled([...owned].map((id) => release(id)));
+        await Promise.race([
+          serverClosed,
+          new Promise((resolve) => setTimeout(resolve, SERVER_CLOSE_BUDGET_MS)),
+        ]);
+        // Then every release goes out at once. An MCP host that closes our
+        // stdin may kill this process about two seconds later (the SDK's
+        // client.close() does, on Windows), and a release under load takes
+        // far longer than that to answer. They used to be awaited one
+        // swarm at a time, so a kill landed mid way and the rest of the
+        // browsers kept running. The gateway completes a release it has
+        // received whether or not the caller is still there to read the
+        // answer, so this waits only until the gateway has acknowledged
+        // each request (see `restSend`). A member release `server.onclose`
+        // already started is skipped here, since `startRelease` sends each
+        // instance once.
+        for (const id of [...owned]) void startRelease(id);
+        await Promise.race([
+          Promise.allSettled([...releasesSent]),
+          new Promise((resolve) => setTimeout(resolve, RELEASE_SEND_BUDGET_MS)),
+        ]);
         process.exit(0);
       })();
     };

@@ -146,12 +146,62 @@ async function waitForBrowserGone(
  * test that calls `terminate()`.
  */
 export const PROFILE_CLEAR_BUDGET_MS = 15_000;
+
+/**
+ * The longest step 5 may run, however slow the scans get. The base budget
+ * above is a soft deadline: the loop runs past it until it has made
+ * {@link PROFILE_CLEAR_MIN_KILL_ROUNDS} kill rounds, and for as long as the
+ * rounds are still making progress, but never past this.
+ */
+export const PROFILE_CLEAR_HARD_CAP_MS = 60_000;
+
+/**
+ * Kill rounds step 5 always gets before it may give up on the soft
+ * deadline. A release under load used to fail with only one or two kill
+ * attempts behind it, because two slow scans (5 s each was seen) used up
+ * the whole 15 s budget. The hard cap still bounds the total.
+ */
+export const PROFILE_CLEAR_MIN_KILL_ROUNDS = 3;
 const PROFILE_CLEAR_POLL_MS = 150;
 
 /** What `confirmProfileClear` last observed, for an honest error message when it gives up. `clear: true` carries nothing else to report. */
-type ProfileClearResult =
-  | { clear: true }
-  | { clear: false; lastSeen: readonly ChromeProcessInfo[] };
+export type ProfileClearResult =
+  | { clear: true; rounds: number; elapsedMs: number }
+  | {
+      clear: false;
+      lastSeen: readonly ChromeProcessInfo[];
+      rounds: number;
+      elapsedMs: number;
+    };
+
+/**
+ * The process table and clock `confirmProfileClear` works against. The
+ * defaults are the real ones; tests pass a fake process table whose scans
+ * take a scripted amount of virtual time.
+ */
+export interface ProfileClearDeps {
+  scan: (profilePath: string) => Promise<readonly ChromeProcessInfo[]>;
+  kill: (pid: number) => Promise<void>;
+  pidAlive: (pid: number) => boolean;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  budgetMs: number;
+  hardCapMs: number;
+  minKillRounds: number;
+}
+
+const realProfileClearDeps: ProfileClearDeps = {
+  scan: (profilePath) => chromeProcsForDataDirAsync(profilePath, { maxAgeMs: 0 }),
+  kill: async (pid) => {
+    await killProcessTree(pid, 'SIGKILL');
+  },
+  pidAlive: (pid) => pidAlive(pid),
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  budgetMs: PROFILE_CLEAR_BUDGET_MS,
+  hardCapMs: PROFILE_CLEAR_HARD_CAP_MS,
+  minKillRounds: PROFILE_CLEAR_MIN_KILL_ROUNDS,
+};
 
 /**
  * The authoritative "is the browser actually gone" check (see this
@@ -161,22 +211,67 @@ type ProfileClearResult =
  * runs out. `lastSeen` on a `false` result is exactly what the final
  * rescan found, so the caller's error message can say what was actually
  * observed instead of a generic "still holds this profile".
+ *
+ * The budget is measured against how long the scans really take. A full
+ * scan of the process table costs about 1.5 s on an idle Windows box and
+ * was seen at 5 s under load, so a fixed 15 s window could hold as few as
+ * two rounds, and a release then failed with Chrome still on its way out.
+ * Three rules keep that from happening without letting a real leak run
+ * forever:
+ *
+ * 1. A scan result is cross checked against `pidAlive` before anything is
+ *    concluded from it. A slow scan reports the table as it was when the
+ *    scan started; a process that died while it ran is not a straggler.
+ *    When every reported pid is already gone, the loop rescans instead of
+ *    killing or giving up.
+ * 2. The loop gives up on the soft deadline only after `minKillRounds`
+ *    kill rounds, however much of the budget the scans themselves ate.
+ * 3. The soft deadline is pushed out whenever a round makes progress (the
+ *    set of live stragglers changed), since a profile still changing hands
+ *    is a teardown still under way. `hardCapMs` bounds everything.
  */
-async function confirmProfileClear(
+export async function confirmProfileClear(
   profilePath: string,
   markEffectiveForce: () => void,
+  deps: ProfileClearDeps = realProfileClearDeps,
 ): Promise<ProfileClearResult> {
-  const deadline = Date.now() + PROFILE_CLEAR_BUDGET_MS;
+  const start = deps.now();
+  const hardCap = start + deps.hardCapMs;
+  let softDeadline = start + deps.budgetMs;
+  let rounds = 0;
+  let previous: Set<number> | null = null;
   for (;;) {
-    const stragglers = await chromeProcsForDataDirAsync(profilePath, { maxAgeMs: 0 });
-    if (stragglers.length === 0) return { clear: true };
-    if (Date.now() >= deadline) return { clear: false, lastSeen: stragglers };
+    const scanned = await deps.scan(profilePath);
+    const stragglers = scanned.filter((p) => deps.pidAlive(p.pid));
+    const now = deps.now();
+    if (stragglers.length === 0) {
+      // Either nothing was reported, or everything reported died while the
+      // scan ran. An empty scan is proof; the second case needs one more
+      // scan to be sure nothing new took over the profile in the meantime.
+      if (scanned.length === 0) return { clear: true, rounds, elapsedMs: now - start };
+      if (now >= hardCap)
+        return { clear: false, lastSeen: scanned, rounds, elapsedMs: now - start };
+      await deps.sleep(PROFILE_CLEAR_POLL_MS);
+      continue;
+    }
+
+    const current = new Set(stragglers.map((p) => p.pid));
+    const progressed =
+      previous !== null &&
+      (current.size < previous.size || [...current].some((pid) => !previous?.has(pid)));
+    previous = current;
+    if (progressed) softDeadline = Math.max(softDeadline, now + deps.budgetMs / 2);
+    softDeadline = Math.min(softDeadline, hardCap);
+
+    const outOfTime = now >= hardCap || (now >= softDeadline && rounds >= deps.minKillRounds);
+    if (outOfTime) return { clear: false, lastSeen: stragglers, rounds, elapsedMs: now - start };
     // All of them at once, not one at a time: see `killProcessTree`'s own
     // doc on why a blocking, serial kill is exactly what let this survive
     // under load in the first place.
-    await Promise.all(stragglers.map((straggler) => killProcessTree(straggler.pid, 'SIGKILL')));
+    await Promise.all(stragglers.map((straggler) => deps.kill(straggler.pid)));
+    rounds += 1;
     markEffectiveForce();
-    await new Promise((resolve) => setTimeout(resolve, PROFILE_CLEAR_POLL_MS));
+    await deps.sleep(PROFILE_CLEAR_POLL_MS);
   }
 }
 
@@ -291,7 +386,7 @@ export async function terminateBrowser(opts: TerminateOptions): Promise<Terminat
         .map((p) => `pid ${p.pid} (ppid ${p.ppid}): ${p.commandLine}`)
         .join('; ');
       throw new Error(
-        `a chrome process still holds profile "${opts.profilePath}" after the '${opts.mode}' terminate ladder completed and its ${PROFILE_CLEAR_BUDGET_MS}ms confirm budget ran out; last scan observed: ${seen}; refusing to report this as a successful termination`,
+        `a chrome process still holds profile "${opts.profilePath}" after the '${opts.mode}' terminate ladder completed and its confirm loop gave up after ${result.rounds} kill rounds in ${result.elapsedMs}ms; last scan observed: ${seen}; refusing to report this as a successful termination`,
       );
     }
   } else {

@@ -152,7 +152,16 @@ const TERMINAL_HOLDER_STATES: ReadonlySet<string> = new Set([
 export type ReuseOutcome =
   | { kind: 'found'; instance: Instance; why: 'profile-shared' | 'sticky' | 'warm' }
   | { kind: 'busy'; holderAppId: string }
-  | { kind: 'none' };
+  | {
+      kind: 'none';
+      /**
+       * The live looking holder of the requested profile's lease, when it
+       * was passed over because no process this router can reach owns it
+       * (see `FindReusableRequest.ownerServable`). The caller may reclaim
+       * its lease rather than wait for it to expire.
+       */
+      abandonedHolder?: Instance;
+    };
 
 /** Everything `findReusable` needs, gathered by `BrowserRouter.acquire` before calling it. */
 export interface FindReusableRequest {
@@ -171,6 +180,18 @@ export interface FindReusableRequest {
   shareCtx: Omit<ShareContext, 'now' | 'liveViewerCount'>;
   clock: Clock;
   store: Store;
+  /**
+   * Whether an instance row is owned by a process this router can actually
+   * hand it out from: this router's own node, or a peer node that is
+   * reachable and alive. Defaults to "yes" for every row.
+   *
+   * Without this check a gateway that restarted after a crash handed out
+   * the dead gateway's rows. They still read `ready`, their profile lease
+   * had not expired yet, and the caller then failed to attach with
+   * "driven by node X, not this gateway", because node X no longer
+   * existed.
+   */
+  ownerServable?: (instance: Instance) => Promise<boolean>;
 }
 
 /**
@@ -180,6 +201,8 @@ export interface FindReusableRequest {
  */
 export async function findReusable(req: FindReusableRequest): Promise<ReuseOutcome> {
   const now = req.clock.now();
+  const servable = req.ownerServable ?? (async () => true);
+  let abandonedHolder: Instance | undefined;
 
   // 1. Profile sharing: a request naming a persistent profile whose key is
   // already leased by a live instance.
@@ -221,7 +244,12 @@ export async function findReusable(req: FindReusableRequest): Promise<ReuseOutco
       // Chrome. That judgement belongs to the steal path, behind its grace
       // window and its probe, and this function's only job is to avoid
       // answering `busy` on behalf of a holder that cannot hold anything.
-      if (holder && !TERMINAL_HOLDER_STATES.has(holder.state)) {
+      // A holder no process here can serve is neither shareable nor a
+      // reason to answer busy. It falls through like a terminal holder,
+      // and is reported so the caller can reclaim its lease.
+      if (holder && !TERMINAL_HOLDER_STATES.has(holder.state) && !(await servable(holder))) {
+        abandonedHolder = holder;
+      } else if (holder && !TERMINAL_HOLDER_STATES.has(holder.state)) {
         const verdict = await canShare(
           holder,
           { tenantId: req.tenantId, appId: req.appId, resolvedSpec: req.resolvedSpec },
@@ -253,9 +281,17 @@ export async function findReusable(req: FindReusableRequest): Promise<ReuseOutco
       status: ['live', 'warm', 'recovering'],
       createdBySub: stickyReq.subject,
     });
-    const sticky = candidates
+    const ordered = candidates
       .filter((i) => stickyReq.withinMs == null || now - i.lastActivityAt <= stickyReq.withinMs)
-      .sort((a, b) => b.lastActivityAt - a.lastActivityAt)[0];
+      .sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+    // The most recent one this router can actually serve; see `ownerServable`.
+    let sticky: Instance | undefined;
+    for (const candidate of ordered) {
+      if (await servable(candidate)) {
+        sticky = candidate;
+        break;
+      }
+    }
     if (sticky) {
       const verdict = await canShare(
         sticky,
@@ -276,5 +312,5 @@ export async function findReusable(req: FindReusableRequest): Promise<ReuseOutco
   });
   if (adopted) return { kind: 'found', instance: adopted, why: 'warm' };
 
-  return { kind: 'none' };
+  return abandonedHolder ? { kind: 'none', abandonedHolder } : { kind: 'none' };
 }

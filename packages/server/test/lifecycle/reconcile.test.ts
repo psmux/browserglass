@@ -43,6 +43,7 @@ import {
   orphanSweepDelayMs,
   orphanSweepScope,
   reapOrphanedInstances,
+  rehomeAdoptedRows,
   scheduleOrphanSweep,
 } from '../../src/lifecycle/wiring.js';
 
@@ -867,5 +868,50 @@ describe('liveOwnerVerdict', () => {
     await takeLease(a, a.profile.id, recorded.id, 0);
     await takeLease(a, other.id, nulled.id, 0);
     expect(await verdicts()).toEqual({ recorded: 'no-live-owner', nulled: 'no-live-owner' });
+  });
+});
+
+describe('rehomeAdoptedRows', () => {
+  it('points an adopted browser row at the node that adopted it', async () => {
+    // A gateway died with its browser still running, and the next one
+    // adopted that browser under a fresh node id. The row has to follow,
+    // or acquire hands out a row naming a node that no longer exists.
+    const a = await realStore();
+    const instance = await launchInstance(a, true);
+    const next = await a.store.registerNode({
+      name: 'gateway-b',
+      runtime: 'host',
+      address: 'http://127.0.0.1:0',
+      registrationSecretEnc: 'enc',
+    });
+
+    const moved = await rehomeAdoptedRows(a.store, next.id as NodeId, [instance.id], noopLogger);
+
+    expect(moved).toEqual([instance.id]);
+    const row = await a.store.getInstance(a.tenant.id, instance.id);
+    expect(row?.nodeId).toBe(next.id);
+    expect(row?.state).toBe('ready');
+  });
+
+  it('leaves rows that are not live, and ids it does not know, alone', async () => {
+    const a = await realStore();
+    const instance = await launchInstance(a, true);
+    await a.store.transitionInstance(a.tenant.id, instance.id, ['live'], 'failed');
+    const next = await a.store.registerNode({
+      name: 'gateway-b',
+      runtime: 'host',
+      address: 'http://127.0.0.1:0',
+      registrationSecretEnc: 'enc',
+    });
+
+    const moved = await rehomeAdoptedRows(
+      a.store,
+      next.id as NodeId,
+      [instance.id, 'inst_unknown'],
+      noopLogger,
+    );
+
+    expect(moved).toEqual([]);
+    expect((await a.store.getInstance(a.tenant.id, instance.id))?.nodeId).toBe(a.node.id);
   });
 });
