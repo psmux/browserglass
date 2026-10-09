@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { AuthError, principalFor } from '../auth/resolver.js';
+import { redactServerPaths } from '../wire/sanitize.js';
 import { applyCorsHeaders, handleCorsPreflight } from './cors.js';
 import { RestError, notImplementedBody, writeError } from './errors.js';
 import { compilePath } from './path.js';
@@ -489,6 +490,14 @@ export async function dispatchRest(
     });
   } catch (err) {
     if (err instanceof RestError) {
+      // `writeError` strips server filesystem paths from the message it
+      // sends. Keep the original in the log so the operator still has it.
+      if (redactServerPaths(err.message) !== err.message) {
+        ctx.logger.warn(
+          { component: 'server', requestId, code: err.code, error: err.message },
+          'redacted a server filesystem path from a REST error message',
+        );
+      }
       writeError(res, requestId, err);
       return;
     }

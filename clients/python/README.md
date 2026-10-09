@@ -32,6 +32,72 @@ socket) and `httpx` (the REST acquire/release calls). Dev dependencies
 
 ## Quickstart
 
+With a gateway running (`bgls serve`), one call gets you a browser:
+
+```python
+import asyncio
+import base64
+
+from browserglass import AutomationClient
+
+
+async def main() -> None:
+    client = await AutomationClient.launch()
+    try:
+        await client.navigate("https://example.com")
+        print(await client.text())
+        shot = await client.screenshot()
+        with open("shot.png", "wb") as f:
+            f.write(base64.b64decode(shot.data))
+    finally:
+        await client.release()  # ends the browser and closes the socket
+
+
+asyncio.run(main())
+```
+
+`launch()` reads `BGLS_URL` (the gateway base URL, default
+`http://127.0.0.1:7799/browserglass`) and `BGLS_ADMIN_TOKEN`. Get a token
+by running `pnpm bgls token` in the directory where `bgls serve` runs. It
+lasts ten minutes; when it is missing or expired, `launch()` raises
+`AutomationError` with code `UNAUTHENTICATED` and says the same thing.
+Everything can be passed directly too:
+
+```python
+client = await AutomationClient.launch(
+    gateway="http://127.0.0.1:7799/browserglass",
+    admin_token=os.environ["BGLS_ADMIN_TOKEN"],
+    headless=True,                          # default
+    viewport={"width": 1280, "height": 800},
+    profile_key="my-account",               # persistent profile; omit for a throwaway one
+    caps=["view", "control", "navigate"],   # default: the agent bundle
+    control=True,                           # default
+)
+```
+
+Under the hood it acquires an instance with a fresh `requestId`, polls
+until it is `ready` (`ready_timeout_s`, default 60), asks the instance's
+`attach` route for a socket ticket with `caps`, connects, and takes the
+control lease. If a step after the acquire fails, the browser is ended
+before the error reaches you. `release()` ends the browser with
+`force=true` and retries on `E_TERMINATE_FAILED`. Calling it twice is
+fine.
+
+`caps` defaults to `DEFAULT_LAUNCH_CAPS`, the `agent` role bundle, so
+every method works, `evaluate()`, `screenshot()`, `diagnostics`, the
+request `gate` and `wait_for_download()` included. It leaves out `admin`.
+The attach route only narrows, so a cap your admin token lacks is
+dropped, and `client.granted` shows what you got. `control=True` is the
+default because without the lease the first `navigate()` fails with
+`LEASE_NOT_HELD`; pass `control=False` for a client that only watches, or
+to call `acquire_control()` yourself. `client.holds_control` tells you
+which.
+
+### Without an admin token: `RestClient` plus `connect()`
+
+When your own server hands out credentials, the script talks REST and the
+socket separately:
+
 ```python
 import asyncio
 
@@ -155,7 +221,11 @@ options.
 * **Navigation**: `client.navigate()`, `client.go_back()`,
   `client.go_forward()`, `client.reload()`, `client.stop()`,
   `client.status()`, `client.wait_for_navigation()`,
-  `client.wait_for_network_idle()`.
+  `client.wait_for_network_idle()`. `navigate()` returns after the new
+  page's `load` event (`wait_until="load"`, the default), so the page can
+  be read on the next line; `wait_until="commit"` returns as soon as the
+  navigation commits. A page that has not loaded within `timeout_ms`
+  (default 30000) comes back with `loading` True instead of raising.
 * **Downloads**: `client.wait_for_download(timeout_ms=, trigger=)`. See
   "Downloads: `wait_for_download()`" below.
 * **Tabs**: `client.tabs.list()`, `client.tabs.open(url=, background=)`,
@@ -297,9 +367,26 @@ disk on the other end.
 
 ## Parallel browsers with `BrowserSwarm`
 
-`BrowserSwarm` opens, drives, and tears down N browsers as one unit,
-rather than a caller hand rolling `asyncio.gather()` over several
-`RestClient.acquire()` plus `AutomationClient.connect()` calls:
+Against a running `bgls serve`, pass `launch` (a dict of
+`AutomationClient.launch()` keyword arguments) and the swarm starts its
+own browsers:
+
+```python
+async with await BrowserSwarm.open(size=10, url="https://example.com", launch={"headless": True}) as swarm:
+    results = await swarm.all(lambda m, i: m.client.text())
+# leaving the block ends all ten browsers
+```
+
+In this mode the swarm owns the browsers: `close()` and `shrink()` end
+them, and a partly failed `open()` ends the ones that did start. A swarm
+with a `subject` only closes its sockets, since the point of a subject is
+getting the same browsers back next run.
+
+When your deployment mints credentials its own way, pass `acquire`
+instead (exactly one of the two). `BrowserSwarm` then opens, drives, and
+tears down N browsers as one unit, rather than a caller hand rolling
+`asyncio.gather()` over several `RestClient.acquire()` plus
+`AutomationClient.connect()` calls:
 
 ```python
 import asyncio

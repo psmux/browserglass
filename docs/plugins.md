@@ -124,6 +124,19 @@ to read and validate its manifest, refuses if the manifest's declared
 `bgls-plugins.json` and copies the file under the data directory. A
 refusal at any step writes nothing.
 
+`bgls-plugins.json` lives in the data directory too:
+`<data-dir>/bgls-plugins.json`, where the data directory is `--data-dir`,
+then `BGLS_DATA_DIR`, then `./bgls-data`. `bgls plugins add/list/remove`,
+`bgls record export --video`, `bgls attach` and `bgls doctor` all resolve
+it the same way (`resolvePluginsFileForRead`,
+`packages/cli/src/plugins/record.ts`). `--file` on the `plugins`
+subcommands overrides the location outright. Older builds wrote it to the
+current working directory; when the data directory has no record yet, a
+`./bgls-plugins.json` is still read as a fallback, and the next `add` or
+`remove` writes the data directory copy, which wins from then on. It is a
+per machine file (a `local` source records an absolute path), so it is in
+`.gitignore` and should not be committed.
+
 `bgls plugins list` never touches the network. For every entry already
 recorded, it runs the same load lifecycle a consumer would: platform gate,
 hash comparison against the recorded `integrity`, `import()`, manifest

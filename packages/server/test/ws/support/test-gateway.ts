@@ -131,6 +131,8 @@ export async function startTestGateway(opts?: {
   readonly downloadMaxBytes?: number;
   /** Threaded straight through to `DownloadStoreOptions.urlTtlMs`. A test exercising `bgls.error.download.expired` sets this small rather than waiting out the real 60s default. */
   readonly downloadUrlTtlMs?: number;
+  /** Maps the harness's own temp directory to the root the download store is given. A test uses it to point the store at a directory that does not exist yet, or at a path that cannot be created, without the harness creating it first. The temp directory itself is still the thing `close()` removes. */
+  readonly downloadRoot?: (tempDir: string) => string;
   /**
    * Threaded straight through to `HookRegistry`'s own `globalTimeoutMs`.
    * Default 5000ms, matching every existing hook test in this suite. A
@@ -251,7 +253,7 @@ export async function startTestGateway(opts?: {
   // timers never has one firing underneath it.
   const downloadRoot = mkdtempSync(join(tmpdir(), 'bgls-ws-download-'));
   const downloads = createDownloadStore({
-    root: downloadRoot,
+    root: opts?.downloadRoot !== undefined ? opts.downloadRoot(downloadRoot) : downloadRoot,
     logger: resolvedWithAuth.logger.sink ?? noopLogger(),
     sweepIntervalMs: 0,
     ...(opts?.downloadMaxBytes !== undefined ? { maxBytes: opts.downloadMaxBytes } : {}),
@@ -299,7 +301,7 @@ export async function startTestGateway(opts?: {
       logger: captureLogger,
       hooks,
       downloadStore: downloads,
-      downloadDir: downloadRoot,
+      downloadDir: downloads.root,
       recordingsDir,
       onIdle: ctx.onIdle,
       ...(opts?.control ? { control: opts.control } : {}),

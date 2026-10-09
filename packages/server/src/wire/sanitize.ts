@@ -108,3 +108,90 @@ export function sanitizeSuggestedName(value: string): string | null {
   if (cleaned.split(/[/\\]/).includes('..')) return null;
   return cleaned;
 }
+
+/** What {@link redactServerPaths} puts in place of a filesystem path it removed. */
+export const REDACTED_PATH = '<server path>';
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Directories whose literal value is known to this process and is the
+ * likeliest thing to leak: the home and temp directories carry the OS
+ * username on every platform. Computed lazily and cached, so importing
+ * this module never touches `node:os` in a context that cannot load it.
+ */
+let knownRoots: RegExp[] | null = null;
+function knownRootPatterns(): RegExp[] {
+  if (knownRoots !== null) return knownRoots;
+  const roots: string[] = [];
+  try {
+    // `process.env` first so a test (or an operator) can see exactly which
+    // value is in play; `os.homedir()`/`os.tmpdir()` read the same vars.
+    const env = typeof process !== 'undefined' ? process.env : {};
+    for (const key of ['HOME', 'USERPROFILE', 'TMPDIR', 'TEMP', 'TMP', 'LOCALAPPDATA', 'APPDATA']) {
+      const v = env[key];
+      if (typeof v === 'string' && v.length > 3) roots.push(v);
+    }
+  } catch {
+    // No process env: fall through with whatever was collected.
+  }
+  knownRoots = roots
+    .sort((a, b) => b.length - a.length)
+    .map((r) => {
+      // Match either separator style, since Node and Chrome both mix them on Windows.
+      const pattern = escapeRegExp(r).replace(/\\\\|\//g, '[\\\\/]');
+      return new RegExp(`${pattern}(?:[\\\\/][^\\s"'\`<>|]*)?`, 'gi');
+    });
+  return knownRoots;
+}
+
+/** `C:\...` or `C:/...`, not preceded by a letter or digit, so `https://` is never mistaken for a drive. */
+const WINDOWS_DRIVE_PATH = /(?<![A-Za-z0-9])[A-Za-z]:[\\/][^\s"'`<>|]*/g;
+/** `\\server\share\...`. */
+const UNC_PATH = /\\\\[^\s\\"'`<>|]+\\[^\s"'`<>|]*/g;
+/** An absolute POSIX path under a root that only ever names the server's own disk. Not preceded by a word character, a dot, a colon or a slash, so a URL's path (`https://host/home/x`) is left alone. */
+const POSIX_SYSTEM_PATH =
+  /(?<![\w.:/~-])\/(?:home|Users|tmp|var|private|root|opt|etc|usr|mnt|srv|run|proc|Volumes|data|workspace|app)(?=\/|\b)(?:\/[^\s"'`<>|]*)?/g;
+
+/**
+ * Removes absolute filesystem paths of the gateway host from a message
+ * that is about to cross the wire. A Node `fs` error's message embeds the
+ * full path it failed on (`ENOENT: no such file or directory, open
+ * 'C:\Users\<name>\...'`), and that path routinely carries the OS username
+ * and the deployment's directory layout, neither of which a client has any
+ * business learning. The caller is expected to have logged the original,
+ * unredacted message server side first; this only shapes what leaves the
+ * process.
+ */
+export function redactServerPaths(value: string): string {
+  let out = value;
+  for (const re of knownRootPatterns()) out = out.replace(re, REDACTED_PATH);
+  return out
+    .replace(UNC_PATH, REDACTED_PATH)
+    .replace(WINDOWS_DRIVE_PATH, REDACTED_PATH)
+    .replace(POSIX_SYSTEM_PATH, REDACTED_PATH);
+}
+
+/** True for a Node system error (`fs`, `net`, `child_process`): one carrying an errno style `code` plus a `syscall`. Its message is built by Node, not by BrowserGlass, and is never shaped for a client. */
+export function isNodeSystemError(err: unknown): err is NodeJS.ErrnoException {
+  return (
+    err instanceof Error &&
+    typeof (err as NodeJS.ErrnoException).code === 'string' &&
+    typeof (err as NodeJS.ErrnoException).syscall === 'string'
+  );
+}
+
+/**
+ * The message to put on the wire for `err`: a Node system error becomes
+ * `fallback` plus its errno code (the code is useful to a caller, the
+ * path in the message is not), anything else keeps its own message with
+ * every server path removed. Always sanitised and capped like any other
+ * outbound message.
+ */
+export function clientSafeErrorMessage(err: unknown, fallback: string): string {
+  if (isNodeSystemError(err)) return sanitizeMessage(`${fallback} (${err.code})`);
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : fallback;
+  return sanitizeMessage(redactServerPaths(raw));
+}

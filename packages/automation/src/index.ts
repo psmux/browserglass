@@ -59,12 +59,17 @@ export type {
   Unsubscribe,
   UploadFileInput,
   WaitForFunctionOptions,
+  NavigateOptions,
   WaitForNavigationOptions,
   WaitForResumeOptions,
   WaitForTextOptions,
   YieldPolicy,
 } from './types.js';
 export type { AutomationClientOptions } from './types.js';
+
+// ---- One call launch against a running gateway ----
+export { DEFAULT_GATEWAY_URL, DEFAULT_LAUNCH_CAPS, launchInstance } from './launch.js';
+export type { LaunchOptions, LaunchedInstance } from './launch.js';
 
 // ---- The locator surface (`resolve` plus thin verbs) ----
 export { LOCATOR_REF_ATTRIBUTE } from './locator/script.js';

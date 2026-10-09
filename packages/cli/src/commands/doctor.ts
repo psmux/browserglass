@@ -29,7 +29,7 @@ import {
 } from '../doctor/checks.js';
 import { runDeepCheck } from '../doctor/deep.js';
 import type { DoctorCheckResult } from '../doctor/types.js';
-import { defaultPluginsFilePath } from '../plugins/record.js';
+import { resolvePluginsFileForRead } from '../plugins/record.js';
 import { defaultDataDir } from '../session-file.js';
 import { EXIT_CODES } from '../util/exit.js';
 import { Printer } from '../util/output.js';
@@ -160,7 +160,7 @@ export const doctorCommand = defineCommand({
       'store-lock': () => checkStoreLockHolder(storePath),
       profiles: () => checkProfiles(storePath),
       packages: () => checkPackageVersions(),
-      plugins: () => checkPlugins(dataDir, defaultPluginsFilePath()),
+      plugins: () => checkPlugins(dataDir, resolvePluginsFileForRead(dataDir)),
       'network-listener': () => checkNetworkListener(listenHost ?? '127.0.0.1', listenPort),
       'network-outbound': () => checkNetworkOutbound(),
       'network-tunnel': () => checkNetworkTunnel(),

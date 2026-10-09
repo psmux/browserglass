@@ -53,6 +53,7 @@ import {
   findPluginEntry,
   readPluginsFile,
   removePluginEntry,
+  resolvePluginsFileForRead,
   upsertPluginEntry,
   writePluginsFile,
 } from '../plugins/record.js';
@@ -73,7 +74,7 @@ const PLUGINS_DIR_ARGS = {
   file: {
     type: 'string',
     description:
-      'Path to bgls-plugins.json, the committed record of what is installed. Default ./bgls-plugins.json in the current directory.',
+      'Path to bgls-plugins.json, the record of what is installed. Default <data-dir>/bgls-plugins.json. A ./bgls-plugins.json left in the current directory by an older bgls is still read when the data dir has none.',
   },
 } as const;
 
@@ -81,8 +82,30 @@ function resolveDataDir(args: { 'data-dir'?: string }): string {
   return args['data-dir'] !== undefined ? resolve(args['data-dir']) : defaultDataDir();
 }
 
-function resolveFilePath(args: { file?: string }): string {
-  return args.file !== undefined ? resolve(args.file) : defaultPluginsFilePath();
+/**
+ * Where to read the record from and where to write it. An explicit
+ * `--file` is both. Otherwise writes go to `<data-dir>/bgls-plugins.json`
+ * and reads prefer that, falling back to a legacy `./bgls-plugins.json`
+ * (`record.ts`'s `resolvePluginsFileForRead`).
+ */
+function resolveFilePaths(args: { file?: string; 'data-dir'?: string }): {
+  readonly filePath: string;
+  readonly readPath: string;
+} {
+  if (args.file !== undefined) {
+    const p = resolve(args.file);
+    return { filePath: p, readPath: p };
+  }
+  const dataDir = resolveDataDir(args);
+  return {
+    filePath: defaultPluginsFilePath(dataDir),
+    readPath: resolvePluginsFileForRead(dataDir),
+  };
+}
+
+function filePathArgs(args: unknown): [filePath: string, readPath: string] {
+  const { filePath, readPath } = resolveFilePaths(args as { file?: string; 'data-dir'?: string });
+  return [filePath, readPath];
 }
 
 // ── add ─────────────────────────────────────────────────────────────────
@@ -155,6 +178,7 @@ export async function runPluginsAdd(
   sourceRaw: string,
   dataDir: string,
   filePath: string,
+  readPath: string = filePath,
 ): Promise<number> {
   const parsed = parsePluginSource(sourceRaw);
   if (!parsed.ok) {
@@ -224,7 +248,7 @@ export async function runPluginsAdd(
       return EXIT_CODES.operationalFailure;
     }
 
-    const read = readPluginsFile(filePath);
+    const read = readPluginsFile(readPath);
     if (!read.ok) {
       printer.error(
         `${read.reason}; refusing to write a new entry into a file that does not already parse correctly. Fix or remove ${read.path} first.`,
@@ -393,8 +417,9 @@ export async function runPluginsRemove(
   id: string,
   dataDir: string,
   filePath: string,
+  readPath: string = filePath,
 ): Promise<number> {
-  const read = readPluginsFile(filePath);
+  const read = readPluginsFile(readPath);
   if (!read.ok) {
     printer.error(read.reason);
     return EXIT_CODES.preconditionFailed;
@@ -453,7 +478,7 @@ export const pluginsAddCommand = defineCommand({
         printer,
         args['source'] as string,
         resolveDataDir(args as { 'data-dir'?: string }),
-        resolveFilePath(args as { file?: string }),
+        ...filePathArgs(args),
       );
     } catch (err) {
       printer.error(err instanceof Error ? err.message : String(err));
@@ -476,7 +501,7 @@ export const pluginsListCommand = defineCommand({
       process.exitCode = await runPluginsList(
         printer,
         resolveDataDir(args as { 'data-dir'?: string }),
-        resolveFilePath(args as { file?: string }),
+        resolveFilePaths(args as { file?: string; 'data-dir'?: string }).readPath,
       );
     } catch (err) {
       printer.error(err instanceof Error ? err.message : String(err));
@@ -507,7 +532,7 @@ export const pluginsRemoveCommand = defineCommand({
         printer,
         args['id'] as string,
         resolveDataDir(args as { 'data-dir'?: string }),
-        resolveFilePath(args as { file?: string }),
+        ...filePathArgs(args),
       );
     } catch (err) {
       printer.error(err instanceof Error ? err.message : String(err));

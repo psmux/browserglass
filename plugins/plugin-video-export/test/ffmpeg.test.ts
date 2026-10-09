@@ -155,6 +155,8 @@ describe('buildFfmpegArgs', () => {
       '/tmp/concat.txt',
       '-fps_mode',
       'vfr',
+      '-vf',
+      'pad=ceil(iw/2)*2:ceil(ih/2)*2',
       '-pix_fmt',
       'yuv420p',
       '/rec/out.mp4',
@@ -165,6 +167,6 @@ describe('buildFfmpegArgs', () => {
     const hostile = "/rec/out.mp4'; rm -rf /";
     const args = buildFfmpegArgs('/tmp/concat.txt', hostile);
     expect(args[args.length - 1]).toBe(hostile);
-    expect(args).toHaveLength(12);
+    expect(args).toHaveLength(14);
   });
 });

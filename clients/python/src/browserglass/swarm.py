@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Generic, List, Optional, Sequence, Set, TypeVar
+from typing import Any, Awaitable, Callable, Generic, List, Mapping, Optional, Sequence, Set, TypeVar
 
 from .client import AutomationClient
 from .errors import AutomationError
@@ -185,13 +185,19 @@ class BrowserSwarm:
 
         async with await BrowserSwarm.open(size=10, acquire=acquire) as swarm:
             results = await swarm.all(lambda m, i: m.client.navigate("https://example.com"))
+
+    Or, against a running ``bgls serve``, with no ``acquire`` at all::
+
+        async with await BrowserSwarm.open(size=10, launch={"headless": True}) as swarm:
+            ...
     """
 
     def __init__(
         self,
         *,
         size: int,
-        acquire: AcquireFn,
+        acquire: Optional[AcquireFn] = None,
+        launch: Optional[Mapping[str, Any]] = None,
         url: Optional[str] = None,
         isolation: Optional[str] = None,
         subject: Optional[str] = None,
@@ -199,6 +205,7 @@ class BrowserSwarm:
         socket_factory: Optional[SocketFactory] = None,
     ) -> None:
         self._acquire = acquire
+        self._launch = dict(launch) if launch is not None else None
         self._url = url
         self.isolation = isolation
         """See ``open()``'s own ``isolation`` parameter: recorded, not
@@ -226,7 +233,8 @@ class BrowserSwarm:
         cls,
         *,
         size: int,
-        acquire: AcquireFn,
+        acquire: Optional[AcquireFn] = None,
+        launch: Optional[Mapping[str, Any]] = None,
         url: Optional[str] = None,
         isolation: Optional[str] = None,
         subject: Optional[str] = None,
@@ -260,12 +268,26 @@ class BrowserSwarm:
         idempotency key per call (from ``index``, or omit one entirely) or
         every member collapses onto the same instance inside the router's
         idempotency window.
+
+        ``launch`` is the no plumbing alternative to ``acquire``: a dict of
+        :meth:`AutomationClient.launch` keyword arguments (``gateway``,
+        ``admin_token``, ``headless``, ``viewport``, ``caps``, ...), used
+        once per member, each with its own fresh ``requestId``. Pass one of
+        ``acquire`` or ``launch``, not both. The swarm then owns those
+        browsers: :meth:`close` and :meth:`shrink` end them, and a
+        partially failed ``open()`` or ``grow()`` ends the ones that did
+        start. The exception is a swarm with a ``subject``: there the point
+        is getting the same browsers back next run, so close and shrink
+        only close the sockets and leave the browsers running.
         """
+        if (acquire is None) == (launch is None):
+            raise AutomationError("INVALID_ARGUMENT", "BrowserSwarm.open(): pass exactly one of `acquire` or `launch`")
         if not isinstance(size, int) or size < 1:
             raise AutomationError("INVALID_ARGUMENT", f"BrowserSwarm.open(): size must be a positive integer, got {size}")
         swarm = cls(
             size=size,
             acquire=acquire,
+            launch=launch,
             url=url,
             isolation=isolation,
             subject=subject,
@@ -364,7 +386,7 @@ class BrowserSwarm:
         self._members = self._members[: len(self._members) - n]
         for m in removed:
             self._claimed.discard(m.index)
-        await _close_members(removed)
+        await self._dispose(removed)
 
     async def close(self) -> None:
         """Closes every member and releases everything ``open()``/``grow()``
@@ -378,7 +400,7 @@ class BrowserSwarm:
         members = self._members
         self._members = []
         self._claimed.clear()
-        await _close_members(members)
+        await self._dispose(members)
 
     async def __aenter__(self) -> "BrowserSwarm":
         return self
@@ -389,6 +411,53 @@ class BrowserSwarm:
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    @property
+    def _owns_browsers(self) -> bool:
+        """Whether this swarm started its members' browsers and so must end
+        them: ``launch`` mode without a subject."""
+        return self._launch is not None and self.subject is None
+
+    async def _dispose(self, members: Sequence[SwarmMember]) -> None:
+        """Closes ``members``, and ends their browsers when this swarm owns
+        them. Every member is tried even if one fails; a failed browser
+        release is then raised, because a browser left running is a leak
+        the caller needs to hear about."""
+        if not self._owns_browsers:
+            await _close_members(members)
+            return
+        settled = await asyncio.gather(*(m.client.release() for m in members), return_exceptions=True)
+        failed = [(m, r) for m, r in zip(members, settled) if isinstance(r, BaseException)]
+        if failed:
+            first_member, first_err = failed[0]
+            raise AutomationError(
+                "GATEWAY_ERROR",
+                f"BrowserSwarm: {len(failed)}/{len(members)} browser(s) could not be ended; "
+                f"first failure (instance {first_member.instance_id}): {first_err}",
+                {"instance_ids": [m.instance_id for m, _ in failed]},
+            )
+
+    async def _connect_member(self, index: int, subject: Optional[str]) -> "tuple[AutomationClient, str]":
+        if self._launch is not None:
+            kwargs = dict(self._launch)
+            if subject is not None:
+                kwargs["subject"] = subject
+            if self._sticky_within_ms is not None:
+                kwargs["sticky_within_ms"] = self._sticky_within_ms
+            if self._socket_factory is not None and "socket_factory" not in kwargs:
+                kwargs["socket_factory"] = self._socket_factory
+            client = await AutomationClient.launch(**kwargs)
+            return client, client.instance_id or ""
+        if self._acquire is None:
+            raise AutomationError("INVALID_ARGUMENT", "BrowserSwarm: no `acquire` or `launch` given")
+        acquired = await self._acquire(index, SwarmAcquireContext(subject=subject, sticky_within_ms=self._sticky_within_ms))
+        client = await AutomationClient.connect(
+            endpoint=acquired.ws_url,
+            token=acquired.token,
+            instance_id=acquired.instance_id,
+            socket_factory=self._socket_factory,
+        )
+        return client, acquired.instance_id
 
     def _reserve_indexes(self, n: int) -> List[int]:
         """Reserves ``n`` member indexes, synchronously, before this
@@ -456,7 +525,10 @@ class BrowserSwarm:
 
         for m in opened:
             self._claimed.discard(m.index)
-        await _close_members(opened)
+        try:
+            await self._dispose(opened)
+        except Exception:
+            pass
         first = failures[0]
         wrapped = first if isinstance(first, AutomationError) else AutomationError("PROTOCOL_ERROR", str(first))
         raise AutomationError(
@@ -477,15 +549,14 @@ class BrowserSwarm:
         yet), so closing it is this method's own responsibility before the
         error propagates."""
         subject = swarm_member_subject(self.subject, index)
-        acquired = await self._acquire(index, SwarmAcquireContext(subject=subject, sticky_within_ms=self._sticky_within_ms))
-        client = await AutomationClient.connect(
-            endpoint=acquired.ws_url,
-            token=acquired.token,
-            instance_id=acquired.instance_id,
-            socket_factory=self._socket_factory,
-        )
+        client, instance_id = await self._connect_member(index, subject)
         try:
-            if self._url is not None:
+            if self._url is not None and client.holds_control:
+                # A launched member already holds the lease (launch's
+                # `control` defaults to True), and it keeps it: that is
+                # what the caller asked launch() for.
+                await client.navigate(self._url)
+            elif self._url is not None:
                 # Acquire, navigate, release: exactly what a caller would
                 # do by hand, so a member fresh out of `open()` is not left
                 # holding control it never asked to keep.
@@ -494,7 +565,7 @@ class BrowserSwarm:
                     await client.navigate(self._url)
                 finally:
                     await lease.release()
-            member = SwarmMember(index=index, instance_id=acquired.instance_id, target_id=client.target_id, subject=subject, client=client)
+            member = SwarmMember(index=index, instance_id=instance_id, target_id=client.target_id, subject=subject, client=client)
             # Wired unconditionally at open time, not when the first
             # `on_control_yield()` subscriber appears. A takeover can land
             # in the gap between `open()` resolving and a caller getting
@@ -504,5 +575,11 @@ class BrowserSwarm:
             client.on_control_yield(lambda notice: self._emit_yield(SwarmYieldEvent(member=member, notice=notice)))
             return member
         except Exception:
-            await client.close()
+            if self._owns_browsers:
+                try:
+                    await client.release()
+                except Exception:
+                    pass
+            else:
+                await client.close()
             raise

@@ -217,6 +217,9 @@ export function buildConcatList(req: EncodeRequest): ConcatListResult {
  * caller to widen: no codec, no bitrate, no filter graph, matching
  * `EncodeRequest`'s own refusal of an options passthrough.
  */
+/** Pads a frame up to the next even width and height. See {@link buildFfmpegArgs}. */
+export const EVEN_DIMENSIONS_FILTER = 'pad=ceil(iw/2)*2:ceil(ih/2)*2';
+
 export function buildFfmpegArgs(concatListPath: string, outPath: string): string[] {
   // `-fps_mode vfr`, not `-vsync vfr`. The two mean the same thing and
   // `-vsync` is the one that no longer exists: it was deprecated in favour
@@ -245,6 +248,15 @@ export function buildFfmpegArgs(concatListPath: string, outPath: string): string
     concatListPath,
     '-fps_mode',
     'vfr',
+    // yuv420p (and libx264 under it) needs even width and height, and a
+    // captured frame is whatever size the viewport was: an odd
+    // `innerHeight` is common. Without this ffmpeg refuses with `height not
+    // divisible by 2` and writes nothing. Padding by at most one pixel on
+    // the right/bottom keeps every captured pixel unscaled, where a
+    // `scale=trunc(iw/2)*2:...` would resample the whole frame to drop one
+    // row. Even sized frames pass through unchanged.
+    '-vf',
+    EVEN_DIMENSIONS_FILTER,
     '-pix_fmt',
     'yuv420p',
     outPath,

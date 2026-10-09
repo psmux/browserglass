@@ -15,9 +15,77 @@ covers the swarm entry point and a runnable example, not every call.
 
 ## One browser: `AutomationClient`
 
+With a gateway running (`bgls serve`), one call gets you a browser:
+
 ```ts
 import { AutomationClient } from '@browserglass/automation';
 
+const browser = await AutomationClient.launch();
+try {
+  await browser.navigate('https://example.com');
+  console.log(await browser.text());
+  const shot = await browser.screenshot(); // shot.data is base64 PNG
+} finally {
+  await browser.release(); // ends the browser and closes the socket
+}
+```
+
+`launch()` reads two environment variables. `BGLS_URL` is the gateway
+base URL and defaults to `http://127.0.0.1:7799/browserglass`.
+`BGLS_ADMIN_TOKEN` is an admin token; get one by running `pnpm bgls token`
+in the directory where `bgls serve` runs. It lasts ten minutes, and when
+it is missing or expired `launch()` throws `UNAUTHENTICATED` with that
+same instruction. Both can be passed directly instead:
+
+```ts
+const browser = await AutomationClient.launch({
+  gateway: 'http://127.0.0.1:7799/browserglass',
+  adminToken: process.env.BGLS_ADMIN_TOKEN,
+  headless: true,                          // default
+  viewport: { width: 1280, height: 800 },
+  profileKey: 'my-account',                // persistent profile; omit for a throwaway one
+  caps: ['view', 'control', 'navigate'],   // default: the agent bundle, see below
+  control: true,                           // default
+});
+```
+
+What it does for you: acquires an instance with a fresh `requestId`,
+polls until it is `ready` (`readyTimeoutMs`, default 60000), asks the
+instance's `attach` route for a socket ticket carrying `caps`, connects,
+and takes the control lease. If any step after the acquire fails, the
+browser is ended before the error reaches you. `release()` closes the
+socket and ends the browser with `force=true`, retrying a couple of times
+on `E_TERMINATE_FAILED`, which Windows sometimes answers once. Calling it
+twice is fine.
+
+`caps` defaults to `DEFAULT_LAUNCH_CAPS`, the `agent` role bundle:
+`evaluate`, `capture`, `devtools`, `intercept`, `download`, `cdp`,
+`instance.restart` and the rest of what it takes to operate one browser,
+so every method on `AutomationClient` works, the selector verbs included.
+It leaves out `admin` and the profile management caps. The ticket the
+acquire call itself returns would carry everything the admin token holds,
+`admin` included, which is why `launch()` asks for a narrower one. The
+attach route only narrows: a cap your admin token does not hold is
+dropped, not added, and the method that needs it fails with
+`POLICY_DENIED`. `client.granted` shows what you actually got.
+
+`control: true` is the default because almost every script wants to
+drive, and without the lease the first `navigate()` fails with
+`LEASE_NOT_HELD`. The lease auto renews. Pass `control: false` for a
+client that only watches, or when you want to call `acquireControl()`
+yourself with your own `waitMs` or `reason`. `client.holdsControl` says
+which state you are in.
+
+`launch()` talks to the gateway with the global `fetch` (Node 22). The
+admin token goes in the `authorization` header and never into an error
+message.
+
+### Connecting to a browser someone else started
+
+When your own server mints the token (the usual shape in production,
+where the script never sees an admin token), connect directly:
+
+```ts
 const client = await AutomationClient.connect({
   endpoint: 'wss://your-gateway.example/browserglass/socket',
   token: automationToken, // minted server side, scoped to one instance
@@ -29,6 +97,14 @@ await client.clickAt(200, 300);
 await lease.release();
 client.close();
 ```
+
+`navigate()` resolves after the new page's `load` event, so you can read
+the page (`status().title`, `evaluate()`, `resolve()`) on the next line.
+Pass `{ waitUntil: 'commit' }` to get the old behaviour, which resolves as
+soon as the navigation commits and the page is still loading. If a page
+never finishes loading within `timeoutMs` (default 30000), `navigate()`
+still resolves, with `loading: true`, so check that field when it matters.
+`'networkidle'` is not implemented yet and the gateway refuses it.
 
 ## Finding things on the page: `resolve` and the verbs on top of it
 
@@ -243,7 +319,32 @@ silently sharing.
 
 ## Several browsers at once: `BrowserSwarm`
 
-`BrowserSwarm` never launches a browser itself. `acquire()` is the one
+Against a running `bgls serve`, pass `launch` and the swarm starts its
+own browsers with `AutomationClient.launch()`, one fresh `requestId` per
+member:
+
+```ts
+import { BrowserSwarm } from '@browserglass/automation';
+
+const swarm = await BrowserSwarm.open({
+  size: 10,
+  url: 'https://example.com',
+  launch: { headless: true }, // any AutomationClient.launch() option
+});
+const texts = await swarm.all((m) => m.client.text());
+await swarm.close(); // ends all ten browsers
+```
+
+In this mode the swarm owns the browsers. `close()` and `shrink()` end
+them, and if some members fail to open, the ones that did open are ended
+too. With a `subject` it is different: the point of a subject is getting
+the same browsers back next run, so `close()` only closes the sockets and
+leaves the browsers running.
+
+When your deployment mints credentials its own way, pass `acquire`
+instead. Exactly one of the two is required.
+
+With `acquire`, `BrowserSwarm` never launches a browser itself. `acquire()` is the one
 piece you supply: a function that gets you from "I want another browser"
 to one Instance's `{ instanceId, wsUrl, token }`, however your own
 deployment does that (an embedded `@browserglass/router`, a REST endpoint

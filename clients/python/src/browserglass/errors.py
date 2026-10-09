@@ -51,6 +51,11 @@ KNOWN_CODES = frozenset(
         "NOT_IMPLEMENTED",
         "PROTOCOL_ERROR",
         "INVALID_ARGUMENT",
+        # The two codes AutomationClient.launch() adds for its REST calls:
+        # the admin token is missing, expired or refused, or the gateway
+        # answered something else that was not a success.
+        "UNAUTHENTICATED",
+        "GATEWAY_ERROR",
     }
 )
 

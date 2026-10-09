@@ -196,6 +196,7 @@ export function createBrowserGlass(config: BrowserGlassConfig): BrowserGlass {
     maxBytes: resolved.limits.downloadMaxBytes,
     urlTtlMs: resolved.limits.downloadUrlTtlMs,
     publicUrl: resolved.publicUrl,
+    basePath: resolved.basePath,
   });
 
   // `resolved.session.control` is threaded in here, at the one place that

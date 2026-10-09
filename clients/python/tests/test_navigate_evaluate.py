@@ -41,6 +41,22 @@ async def test_navigate_returns_status_and_sends_nav_goto():
         goto = [m for m in socket.sent_json_messages() if m["t"] == "nav.goto"][0]
         assert goto["url"] == "https://example.com"
         assert goto["targetId"] == "t1"
+        # Waits for load by default, so the page can be read straight away.
+        assert goto["waitUntil"] == "load"
+        assert goto["timeoutMs"] == 30000
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_navigate_wait_until_commit_sends_no_load_timeout():
+    client, socket = await connect_client({"control.request": control_granted_handler(), "nav.goto": nav_state_handler()})
+    try:
+        await client.acquire_control()
+        await client.navigate("https://example.com", wait_until="commit")
+        goto = [m for m in socket.sent_json_messages() if m["t"] == "nav.goto"][-1]
+        assert goto["waitUntil"] == "commit"
+        assert "timeoutMs" not in goto
     finally:
         await client.close()
 

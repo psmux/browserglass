@@ -33,6 +33,9 @@ coverage/
 *.sqlite
 *.sqlite3
 bgls-data/
+# The plugin record now lives under the data dir; an older bgls wrote it to
+# the current directory, with machine specific paths in it.
+bgls-plugins.json
 
 # Logs
 *.log

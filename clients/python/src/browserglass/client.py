@@ -22,6 +22,7 @@ import inspect
 import math
 import time
 import uuid
+import weakref
 from typing import Any, Awaitable, Callable, List, Mapping, Optional, Sequence, Union
 
 from .binary import (
@@ -35,6 +36,7 @@ from .binary import (
 from .core import AutomationCore
 from .errors import AutomationError
 from .keys import named_key_code, printable_key_code
+from .launch import launch_instance
 from .lease import ControlLeaseHandle
 from .locator.engine import ENGINE_WORLD, LocatorEngine, LocatorRuntime
 from .locator.types import ClickResult, FillResult, LocatorMatch, ResolveResult, SelectResult, WaitForResult
@@ -397,6 +399,20 @@ class Tabs:
         return await c._run("tabs.active", c.target_id, ["tabs.manage"], False, None, False, fn)
 
 
+class _ReleaseState:
+    """What ``release()`` needs for a client that ``launch()`` opened, keyed
+    by the shared core so a ``for_target()`` sub-client releases the same
+    browser. A client from ``connect()`` has no entry, and its
+    ``release()`` only closes the socket."""
+
+    def __init__(self, end_browser: Callable[[], Awaitable[None]]) -> None:
+        self.end_browser = end_browser
+        self.done: Optional["asyncio.Task[None]"] = None
+
+
+_launched: "weakref.WeakKeyDictionary[AutomationCore, _ReleaseState]" = weakref.WeakKeyDictionary()
+
+
 class AutomationClient:
     def __init__(self, core: AutomationCore, target_id: str) -> None:
         self._core = core
@@ -466,6 +482,129 @@ class AutomationClient:
             raise AutomationError("NOT_FOUND", "no target available to bind to; pass target_id")
 
         return cls(core, tid)
+
+    @classmethod
+    async def launch(
+        cls,
+        *,
+        gateway: Optional[str] = None,
+        admin_token: Optional[str] = None,
+        headless: bool = True,
+        viewport: Optional[Mapping[str, Any]] = None,
+        profile_key: Optional[str] = None,
+        caps: Optional[Sequence[str]] = None,
+        control: bool = True,
+        ready_timeout_s: float = 60.0,
+        poll_interval_s: float = 0.25,
+        browser: Optional[Mapping[str, Any]] = None,
+        subject: Optional[str] = None,
+        sticky_within_ms: Optional[float] = None,
+        default_timeout_ms: float = 15000,
+        step_budget: float = math.inf,
+        on_action: Optional[Callable[[ActionRecord], None]] = None,
+        release_on_yield: bool = True,
+        socket_factory: Optional[SocketFactory] = None,
+        http_client: Optional[Any] = None,
+    ) -> "AutomationClient":
+        """Starts a browser on a running gateway and returns a client
+        connected to it, in one call. Does the REST plumbing a script would
+        otherwise carry by hand: acquire with a fresh ``requestId``, wait
+        for ``ready``, mint a socket ticket with ``caps``, connect, and
+        (with ``control``, the default) take the control lease so the first
+        ``navigate()`` just works.
+
+        ``gateway`` defaults to ``BGLS_URL``, then
+        ``http://127.0.0.1:7799/browserglass``. ``admin_token`` defaults to
+        ``BGLS_ADMIN_TOKEN``; get one with ``pnpm bgls token`` where
+        ``bgls serve`` runs. ``caps`` defaults to the ``agent`` bundle
+        (:data:`browserglass.launch.DEFAULT_LAUNCH_CAPS`), which makes every
+        method on this class usable. Pass ``control=False`` for a client
+        that watches rather than drives, or that wants to call
+        ``acquire_control()`` itself with its own options.
+
+        Call :meth:`release` when done; it ends the browser. If anything
+        fails after the browser was started, the browser is ended again
+        before this raises::
+
+            client = await AutomationClient.launch()
+            try:
+                await client.navigate("https://example.com")
+                print(await client.text())
+            finally:
+                await client.release()
+        """
+        instance = await launch_instance(
+            gateway=gateway,
+            admin_token=admin_token,
+            headless=headless,
+            viewport=viewport,
+            profile_key=profile_key,
+            caps=caps,
+            ready_timeout_s=ready_timeout_s,
+            poll_interval_s=poll_interval_s,
+            browser=browser,
+            subject=subject,
+            sticky_within_ms=sticky_within_ms,
+            http_client=http_client,
+        )
+        try:
+            client = await cls.connect(
+                endpoint=instance.ws_url,
+                token=instance.ticket,
+                instance_id=instance.instance_id,
+                default_timeout_ms=default_timeout_ms,
+                step_budget=step_budget,
+                on_action=on_action,
+                release_on_yield=release_on_yield,
+                socket_factory=socket_factory,
+            )
+        except BaseException:
+            try:
+                await instance.release()
+            except Exception:
+                pass
+            raise
+        _launched[client._core] = _ReleaseState(instance.release)
+        if control:
+            try:
+                await client.acquire_control()
+            except BaseException:
+                try:
+                    await client.release()
+                except Exception:
+                    pass
+                raise
+        return client
+
+    async def release(self) -> None:
+        """Closes the socket and, for a client from :meth:`launch`, ends the
+        browser (``DELETE /v1/instances/:id?force=true``, retried on
+        ``E_TERMINATE_FAILED``). Idempotent: a second call waits on the
+        first. If ending the browser fails, the error is raised and the
+        next call tries again. For a client from :meth:`connect` this is
+        the same as :meth:`close`, since this client did not start the
+        browser."""
+        state = _launched.get(self._core)
+        try:
+            await self._core.close()
+        except Exception:
+            pass
+        if state is None:
+            return
+        if state.done is None:
+            state.done = asyncio.ensure_future(state.end_browser())
+        task = state.done
+        try:
+            await asyncio.shield(task)
+        except BaseException:
+            if task.done() and state.done is task:
+                state.done = None
+            raise
+
+    @property
+    def holds_control(self) -> bool:
+        """Whether this client holds the control lease on :attr:`target_id` right now."""
+        return self._core.has_control(self._target_id)
 
     # ------------------------------------------------------------------
     # Binding and lease
@@ -693,11 +832,45 @@ class AutomationClient:
     # Navigation
     # ------------------------------------------------------------------
 
-    async def navigate(self, url: str, *, referrer: Optional[str] = None, wait_until: Optional[str] = None) -> StatusResult:
+    async def navigate(
+        self,
+        url: str,
+        *,
+        referrer: Optional[str] = None,
+        wait_until: str = "load",
+        timeout_ms: float = 30000,
+    ) -> StatusResult:
+        """Navigates :attr:`target_id` to ``url`` and returns once the page
+        has loaded, so reading the page straight after ``await
+        navigate(url)`` sees the new document (its real ``title``,
+        ``loading`` False).
+
+        ``wait_until`` picks when this returns:
+
+        * ``"load"`` (the default): after the new document's ``load``
+          event. If the page has not loaded within ``timeout_ms`` this
+          still returns, with ``loading`` True, rather than raising.
+        * ``"commit"``: as soon as the navigation commits, with the page
+          still loading (``loading`` True, usually an empty ``title``).
+        * ``"networkidle"``: not implemented by the gateway, which refuses
+          it.
+
+        Needs ``navigate`` and a held control lease.
+        """
+        payload: dict = {"targetId": self._target_id, "url": url, "waitUntil": wait_until}
+        if referrer is not None:
+            payload["referrer"] = referrer
+        if wait_until == "load":
+            payload["timeoutMs"] = timeout_ms
+
         async def fn() -> StatusResult:
+            # When waiting for load the gateway answers by timeout_ms at the
+            # latest; wait a little longer here so its honest loading=True
+            # reply wins over a client side TIMEOUT.
             reply = await self._core.request(
                 "nav.goto",
-                {"targetId": self._target_id, "url": url, **({"referrer": referrer} if referrer is not None else {}), **({"waitUntil": wait_until} if wait_until is not None else {})},
+                payload,
+                max(self._core.default_timeout_ms, timeout_ms + 5000) if wait_until == "load" else None,
             )
             return self._nav_state_to_status(reply)
 
@@ -1535,7 +1708,7 @@ class AutomationClient:
                 fut.set_result(
                     DownloadResult(
                         download_id=msg["downloadId"], size_bytes=msg["sizeBytes"], sha256=msg["sha256"],
-                        url=msg["url"], expires_at=msg["expiresAt"],
+                        url=self._core.resolve_gateway_url(msg["url"]), expires_at=msg["expiresAt"],
                     )
                 )
             elif t == "download.failed":

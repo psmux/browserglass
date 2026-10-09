@@ -91,7 +91,11 @@ import {
 import { defineCommand } from 'citty';
 import { GLOBAL_ARGS, resolveGlobalFlags } from '../context.js';
 import { withDeadline } from '../plugins/load.js';
-import { EMPTY_PLUGINS_FILE, defaultPluginsFilePath, readPluginsFile } from '../plugins/record.js';
+import {
+  EMPTY_PLUGINS_FILE,
+  readPluginsFile,
+  resolvePluginsFileForRead,
+} from '../plugins/record.js';
 import { type PluginAvailability, assistFor } from '../plugins/registry.js';
 import { defaultDataDir } from '../session-file.js';
 import { EXIT_CODES } from '../util/exit.js';
@@ -311,14 +315,15 @@ export interface AttachDeps {
 }
 
 async function resolveAssistPluginReal(): Promise<PluginAvailability<PermissionAssistPlugin>> {
-  const read = readPluginsFile(defaultPluginsFilePath());
+  const dataDir = defaultDataDir();
+  const read = readPluginsFile(resolvePluginsFileForRead(dataDir));
   // A record that fails to parse or validate is `bgls plugins verify`'s
   // and `bgls plugins list`'s business to report in full; this command
   // degrades to the same "nothing usable" answer a genuinely empty record
   // would give, rather than failing an attach over a plugin record problem
   // that has nothing to do with the browser this command is trying to find.
   const file = read.ok ? read.file : EMPTY_PLUGINS_FILE;
-  return assistFor(file, defaultDataDir());
+  return assistFor(file, dataDir);
 }
 
 const REAL_DEPS: AttachDeps = {

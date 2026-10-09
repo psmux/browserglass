@@ -1,6 +1,7 @@
 import type { ServerResponse } from 'node:http';
 import type { Store } from '@browserglass/protocol';
 import { compact } from '../util/compact.js';
+import { redactServerPaths } from '../wire/sanitize.js';
 import type { RestContext } from './types.js';
 
 /** The one error envelope shape every REST response uses. */
@@ -49,7 +50,9 @@ export function writeError(res: ServerResponse, requestId: string, err: RestErro
   const body: RestErrorBody = {
     error: compact({
       code: err.code,
-      message: err.message,
+      // Some routes build a RestError from a caught error's message; a
+      // Node fs error's message carries an absolute server path.
+      message: redactServerPaths(err.message),
       retryable: err.retryable,
       retryAfterMs: err.retryAfterMs,
       details: err.details,
