@@ -62,7 +62,7 @@ import { checkCapability } from '../wire/capability-check.js';
 import { buildGoodbye, reasonForCloseCode } from '../wire/close.js';
 import { type RateBucketName, ViewerRateLimiters } from '../wire/rate-limit.js';
 import type { ResumeStore } from '../wire/resume-store.js';
-import { sanitizeMessage } from '../wire/sanitize.js';
+import { clientSafeErrorMessage, redactServerPaths, sanitizeMessage } from '../wire/sanitize.js';
 import { buildWelcomeFields, rateLimitInputsFor } from '../wire/welcome-fields.js';
 import {
   type PreUpgradeCarriers,
@@ -304,7 +304,7 @@ export class Connection implements ConnectionSink {
       if (!this.ensureRateLimiters().take(diagBucket, performance.now(), scope)) return;
     }
     this.sqCounter += 1;
-    const full = { v: 1, ...env, ts: Date.now(), sq: this.sqCounter };
+    const full = { v: 1, ...this.redactErrorPaths(env), ts: Date.now(), sq: this.sqCounter };
     this.ws.send(JSON.stringify(full));
   }
 
@@ -406,6 +406,28 @@ export class Connection implements ConnectionSink {
         securityState: 'unknown' as const,
       },
     );
+  }
+
+  /**
+   * Last line of defence for every `error` envelope this connection sends:
+   * strips absolute filesystem paths of this host from `message` (see
+   * `wire/sanitize.ts`'s `redactServerPaths`). Handlers are expected to
+   * build clean messages in the first place (`clientSafeErrorMessage`),
+   * but many forward a caught `err.message`, and a Node `fs` error's
+   * message embeds the full path, OS username included. When something is
+   * redacted the original is logged so an operator still has it.
+   */
+  private redactErrorPaths<T extends { readonly t: string }>(env: T): T {
+    if (env.t !== 'error') return env;
+    const message = (env as { readonly message?: unknown }).message;
+    if (typeof message !== 'string') return env;
+    const redacted = redactServerPaths(message);
+    if (redacted === message) return env;
+    this.deps.logger.warn(
+      { component: 'ws', code: String((env as { readonly code?: unknown }).code), message },
+      'redacted a server filesystem path from an outbound error message',
+    );
+    return { ...env, message: redacted };
   }
 
   private replyTo<T extends { readonly t: string }>(
@@ -569,7 +591,7 @@ export class Connection implements ConnectionSink {
           t: 'error',
           code,
           category: code.split('.')[2] ?? 'upload',
-          message: err instanceof Error ? err.message : `upload "${uploadId}" rejected a chunk`,
+          message: clientSafeErrorMessage(err, `upload "${uploadId}" rejected a chunk`),
           fatal: false,
           retryable: false,
           context: { uploadId },
@@ -1649,8 +1671,7 @@ export class Connection implements ConnectionSink {
           t: 'error',
           code: wireCode,
           category: wireCode === 'bgls.error.target.not_found' ? 'target' : 'capture',
-          message:
-            err instanceof Error ? err.message : `page.pdf.get failed for target "${targetId}".`,
+          message: clientSafeErrorMessage(err, `page.pdf.get failed for target "${targetId}".`),
           fatal: false,
           retryable: wireCode !== 'bgls.error.target.not_found',
         });
@@ -3280,7 +3301,7 @@ function recordingErrorReply(
     t: 'error',
     code: wireCode,
     category: wireCode === 'bgls.error.internal' ? 'internal' : 'target',
-    message: err instanceof Error ? err.message : `recording request failed for "${subject}".`,
+    message: clientSafeErrorMessage(err, `recording request failed for "${subject}".`),
     fatal: false,
     retryable: false,
   };

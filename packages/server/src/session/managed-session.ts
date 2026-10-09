@@ -9,7 +9,7 @@
  */
 
 import { randomBytes } from 'node:crypto';
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   Attachment,
@@ -132,6 +132,7 @@ import type { Logger } from '../config/logger.js';
 import { safeFileName } from '../files/safe-name.js';
 import { buildGoodbye } from '../wire/close.js';
 import {
+  redactServerPaths,
   sanitizeConsoleText,
   sanitizeMessage,
   sanitizeSuggestedName,
@@ -730,6 +731,24 @@ const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
  * frame fan-out state. One instance per Instance (not per viewer): a
  * `SessionRegistry` (`./registry.js`) hands out shared references, join-in-flight.
  */
+/**
+ * Thrown by {@link ManagedSession.pdf} when a PDF too large to inline could
+ * not be written into the download store. Its message is deliberately
+ * fixed text plus the errno code: the underlying `fs` error, which embeds
+ * the absolute server path, is logged and never forwarded.
+ */
+export class PdfStagingError extends Error {
+  readonly code = 'E_PDF_STAGING_FAILED';
+  readonly fsCode: string | undefined;
+  constructor(fsCode: string | undefined) {
+    super(
+      `The rendered PDF could not be written to the gateway's download store${fsCode !== undefined ? ` (${fsCode})` : ''}. The gateway log has the details.`,
+    );
+    this.name = 'PdfStagingError';
+    this.fsCode = fsCode;
+  }
+}
+
 export class ManagedSession {
   readonly instanceId: string;
   readonly sessionId: string;
@@ -1985,7 +2004,9 @@ export class ManagedSession {
           stoppedAtMs: rec.stoppedAtMs,
           framesWritten: rec.recorder.framesWritten,
           failed: rec.recorder.failed,
-          ...(lastError ? { errorMessage: sanitizeMessage(lastError.message) } : {}),
+          ...(lastError
+            ? { errorMessage: sanitizeMessage(redactServerPaths(lastError.message)) }
+            : {}),
         })
         .catch((err: unknown) => {
           this.logger?.error(
@@ -3265,7 +3286,32 @@ export class ManagedSession {
 
     const downloadId = `pdf_${randomBytes(16).toString('hex')}`;
     const path = join(this.downloadStore.root, downloadId);
-    await writeFile(path, Buffer.from(data, 'base64'));
+    try {
+      // The store never creates its own root (Chrome is normally the first
+      // thing to write into it, and Chrome creates it on demand). A fresh
+      // gateway that has not seen a real download yet has no such
+      // directory, so this write would fail with ENOENT without this.
+      await mkdir(this.downloadStore.root, { recursive: true });
+      await writeFile(path, Buffer.from(data, 'base64'));
+    } catch (err) {
+      // The full path and the raw fs message go to the log only. What the
+      // caller sees is a fixed sentence plus the errno code: the path names
+      // the server's disk layout and usually the OS user.
+      const code =
+        err instanceof Error && typeof (err as NodeJS.ErrnoException).code === 'string'
+          ? (err as NodeJS.ErrnoException).code
+          : undefined;
+      this.logger?.error(
+        {
+          component: 'server',
+          targetId,
+          path,
+          error: err instanceof Error ? err.message : String(err),
+        },
+        'could not stage a large PDF in the download store',
+      );
+      throw new PdfStagingError(code);
+    }
 
     let finalized: FinalizedDownload;
     try {
