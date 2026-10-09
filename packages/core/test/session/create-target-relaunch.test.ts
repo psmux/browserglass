@@ -177,4 +177,89 @@ describe('Session.createTarget: transparent relaunch after the browser process e
     expect(executorCalls).toBe(1);
     expect(dead.bridge.state).toBe('closed');
   });
+  it('a target.new that reaches a browser mid-quit (no windows left, socket not yet dropped) waits for the drop, relaunches once, and succeeds', async () => {
+    // The race a slow machine hits: every window closed, Chrome is quitting,
+    // but its WebSocket is still up, so `bridge.state` is still 'open' and
+    // `Target.createTarget` reaches a browser that answers "Failed to open
+    // a new tab". The socket drops a moment later.
+    const quitting = await startFakeRegistry(undefined, undefined, NO_RECONNECT_ATTEMPTS);
+    expect(quitting.registry.tabs()).toEqual([]);
+    const original = quitting.socket.autoRespond;
+    quitting.socket.autoRespond = (msg, socket) => {
+      if (msg.method === 'Target.createTarget') {
+        socket.emitError(msg.id, { code: -32000, message: 'Failed to open a new tab' });
+        setTimeout(() => socket.simulateClose(1006, 'browser quit'), 0);
+        return;
+      }
+      original?.(msg, socket);
+    };
+
+    const relaunched = await startFakeRegistry();
+    relaunched.world.targetInfos = [];
+    const { createdCount } = scriptTargetCreation(relaunched);
+
+    let executorCalls = 0;
+    const session = new Session({
+      id: 'sess_quitting' as never,
+      instanceId: quitting.instanceId,
+      tenantId: 't',
+      nodeId: 'n',
+      bridge: quitting.bridge,
+      registry: quitting.registry,
+      clock: createManualClock(),
+      onEffect: () => {},
+      restartInstanceExecutor: async () => {
+        executorCalls += 1;
+        return { ok: true, bridge: relaunched.bridge, registry: relaunched.registry };
+      },
+    });
+    session.provision();
+
+    const target = await session.createTarget({});
+    expect(target.type).toBe('page');
+    expect(executorCalls).toBe(1);
+    expect(createdCount()).toBe(1);
+  });
+
+  it('a target.new that fails on a browser with no windows whose socket stays open is reported as the real failure, with no relaunch', async () => {
+    const live = await startFakeRegistry();
+    expect(live.registry.tabs()).toEqual([]);
+    const original = live.socket.autoRespond;
+    live.socket.autoRespond = (msg, socket) => {
+      if (msg.method === 'Target.createTarget') {
+        socket.emitError(msg.id, { code: -32000, message: 'Failed to open a new tab' });
+        return;
+      }
+      original?.(msg, socket);
+    };
+
+    const clock = createManualClock();
+    let executorCalls = 0;
+    const session = new Session({
+      id: 'sess_real_failure' as never,
+      instanceId: live.instanceId,
+      tenantId: 't',
+      nodeId: 'n',
+      bridge: live.bridge,
+      registry: live.registry,
+      clock,
+      onEffect: () => {},
+      restartInstanceExecutor: async () => {
+        executorCalls += 1;
+        return { ok: false };
+      },
+    });
+    session.provision();
+
+    const pending = session.createTarget({});
+    const settled = pending.then(
+      () => 'resolved',
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+    await flushMicrotasks();
+    await clock.advance(5000);
+    expect(await settled).toMatch(/Failed to open a new tab/);
+    expect(executorCalls).toBe(0);
+    expect(live.bridge.state).toBe('open');
+  });
 });
