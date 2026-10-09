@@ -41,7 +41,19 @@
  * often invents for itself, including the same known
  * limitation: it goes stale when the subtree re-renders. See
  * `LOCATOR_REF_ATTRIBUTE`'s own note.
+ *
+ * WHY EVERY EXPORT GOES THROUGH `compactPageScript`
+ *
+ * The gateway refuses any evaluate source over `MAX_EVALUATE_SOURCE_BYTES`
+ * (32768). Written out with its comments and indentation, `WAIT_SCRIPT`
+ * alone was 34582 bytes. So the comments below stay where a reader needs
+ * them and get stripped before the text is sent. See `./compact.ts` for
+ * what it removes and why that is safe, and
+ * `test/client/locator-compact.test.ts` for the size budget every export
+ * has to stay inside.
  */
+
+import { compactPageScript } from './compact.js';
 
 /** The attribute a stamped match is addressed by. Kept in one place because both this script and the client-side `ref=` selector spelling have to agree on it. */
 export const LOCATOR_REF_ATTRIBUTE = 'data-bgls-ref';
@@ -788,10 +800,10 @@ function bglsSatisfied(state, res, index) {
  * `resolve(selector)`, the primitive every other verb is built on. One
  * argument, one round trip, all matches.
  */
-export const RESOLVE_SCRIPT = `(spec) => {
+export const RESOLVE_SCRIPT = compactPageScript(`(spec) => {
 ${RESOLVER_CORE}
   return bglsResolve(spec);
-}`;
+}`);
 
 /**
  * `waitFor(selector, state)` as ONE evaluate that holds for the whole
@@ -818,7 +830,7 @@ ${RESOLVER_CORE}
  * turns the returned observation into an error that names which check
  * failed and what the element looked like when it did.
  */
-export const WAIT_SCRIPT = `(spec) => {
+export const WAIT_SCRIPT = compactPageScript(`(spec) => {
 ${RESOLVER_CORE}
   var check = spec.check;
   var stampSpec = spec.stamp;
@@ -836,7 +848,8 @@ ${RESOLVER_CORE}
     function finish(payload) {
       if (done) return;
       done = true;
-      try { if (observer) observer.disconnect(); } catch (e) { /* the document is gone; nothing to disconnect from */ }
+      // If the document is gone there is nothing to disconnect from.
+      try { if (observer) observer.disconnect(); } catch (e) {}
       if (interval !== null) clearInterval(interval);
       if (timer !== null) clearTimeout(timer);
       payload.waitedMs = Date.now() - startedAt;
@@ -914,7 +927,7 @@ ${RESOLVER_CORE}
     timer = setTimeout(function () { finish({ timedOut: true, result: last }); }, spec.deadlineMs);
     run();
   });
-}`;
+}`);
 
 /**
  * Reads back one already-resolved element, addressed by ref. Kept separate
@@ -922,7 +935,7 @@ ${RESOLVER_CORE}
  * `isChecked`) want none of the measurement: no rects, no frames, no hit
  * test, so no reason to pay two animation frames for a string.
  */
-export const READ_SCRIPT = `(spec) => {
+export const READ_SCRIPT = compactPageScript(`(spec) => {
   var attr = ${JSON.stringify(LOCATOR_REF_ATTRIBUTE)};
   var sel = '[' + attr + '="' + (window.CSS && CSS.escape ? CSS.escape(spec.ref) : spec.ref) + '"]';
   var el = document.querySelector(sel);
@@ -938,7 +951,7 @@ export const READ_SCRIPT = `(spec) => {
     out.value = typeof el.value === 'string' ? el.value : null;
   }
   return out;
-}`;
+}`);
 
 /**
  * The last rung of the click ladder, and the reason it is last.
@@ -951,14 +964,14 @@ export const READ_SCRIPT = `(spec) => {
  * `via: 'dispatch'` opt-in and never as the default, which goes through
  * real CDP input.
  */
-export const DISPATCH_CLICK_SCRIPT = `(spec) => {
+export const DISPATCH_CLICK_SCRIPT = compactPageScript(`(spec) => {
   var attr = ${JSON.stringify(LOCATOR_REF_ATTRIBUTE)};
   var sel = '[' + attr + '="' + (window.CSS && CSS.escape ? CSS.escape(spec.ref) : spec.ref) + '"]';
   var el = document.querySelector(sel);
   if (!el) return { found: false };
   el.click();
   return { found: true };
-}`;
+}`);
 
 /**
  * Clears an editable element without key events, the fallback path for a
@@ -969,7 +982,7 @@ export const DISPATCH_CLICK_SCRIPT = `(spec) => {
  * event a no-op. This is the well-known controlled-input workaround and it
  * is needed here for the same reason it is needed everywhere else.
  */
-export const CLEAR_SCRIPT = `(spec) => {
+export const CLEAR_SCRIPT = compactPageScript(`(spec) => {
   var attr = ${JSON.stringify(LOCATOR_REF_ATTRIBUTE)};
   var sel = '[' + attr + '="' + (window.CSS && CSS.escape ? CSS.escape(spec.ref) : spec.ref) + '"]';
   var el = document.querySelector(sel);
@@ -986,7 +999,7 @@ export const CLEAR_SCRIPT = `(spec) => {
   el.dispatchEvent(new Event('input', { bubbles: true }));
   el.dispatchEvent(new Event('change', { bubbles: true }));
   return { found: true, cleared: true };
-}`;
+}`);
 
 /**
  * Sets the selected `<option>`(s) on a `<select>` addressed by ref, the
@@ -1030,7 +1043,7 @@ export const CLEAR_SCRIPT = `(spec) => {
  * for `['US', 'CA']` on a `<select multiple>` that only has `US` gets
  * neither selected, not `US` selected and a confusing partial failure.
  */
-export const SELECT_SCRIPT = `(spec) => {
+export const SELECT_SCRIPT = compactPageScript(`(spec) => {
 ${OPTION_LIST_HELPER}
   var attr = ${JSON.stringify(LOCATOR_REF_ATTRIBUTE)};
   var sel = '[' + attr + '="' + (window.CSS && CSS.escape ? CSS.escape(spec.ref) : spec.ref) + '"]';
@@ -1097,7 +1110,7 @@ ${OPTION_LIST_HELPER}
     }
   }
   return { found: true, values: values, labels: labels };
-}`;
+}`);
 
 /**
  * `findInPage()`'s page-side half: a full-text search over the page's
@@ -1124,7 +1137,7 @@ ${OPTION_LIST_HELPER}
  * literal is exactly the kind of thing that is easy to get subtly wrong and
  * hard to notice here.
  */
-export const FIND_IN_PAGE_SCRIPT = `(spec) => {
+export const FIND_IN_PAGE_SCRIPT = compactPageScript(`(spec) => {
 ${RESOLVER_CORE}
 function bglsFindInPage(spec) {
   var scopeEl = spec.scope ? document.querySelector(spec.scope) : (document.body || document.documentElement);
@@ -1189,4 +1202,4 @@ function bglsFindInPage(spec) {
   };
 }
   return bglsFindInPage(spec);
-}`;
+}`);
