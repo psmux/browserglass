@@ -1,6 +1,7 @@
 import { MAX_EVALUATE_TIMEOUT_MS } from '@browserglass/protocol';
 import type { Capability, EvaluateWorld } from '@browserglass/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { AutomationError } from '../../src/errors.js';
 import { AutomationClient } from '../../src/index.js';
 import { LocatorEngine, type LocatorRuntime } from '../../src/locator/engine.js';
 import {
@@ -155,6 +156,8 @@ class FakeRuntime implements LocatorRuntime {
   }> = [];
   /** Queued answers, consumed in order; the last one repeats. Unset, a call throws: a test exercising `role=` has to say what the CDP side found. */
   roleReplies: Array<{ attr: string | null }> = [];
+  /** Thrown, one per call and in order, by `WAIT_SCRIPT` evaluations before any reply is used. */
+  waitErrors: unknown[] = [];
   /** What `listFrameTargets()` answers. A test wanting a cross-origin `frame=` hop to succeed sets this to the one `iframe`-kind target its `src` should correlate to. */
   frameTargets: Array<{ targetId: string; url: string }> = [];
 
@@ -174,7 +177,11 @@ class FakeRuntime implements LocatorRuntime {
   ): Promise<T> {
     this.evaluations.push({ targetId, source, args, timeoutMs, world });
     if (source === RESOLVE_SCRIPT) return this.shift(this.resolveReplies) as T;
-    if (source === WAIT_SCRIPT) return this.shift(this.waitReplies) as T;
+    if (source === WAIT_SCRIPT) {
+      const err = this.waitErrors.shift();
+      if (err !== undefined) throw err;
+      return this.shift(this.waitReplies) as T;
+    }
     if (source === READ_SCRIPT) return this.shift(this.readReplies) as T;
     if (source === CLEAR_SCRIPT) return this.clearReply as T;
     if (source === DISPATCH_CLICK_SCRIPT) return this.dispatchReply as T;
@@ -527,6 +534,49 @@ describe('role= on top of resolve/waitFor', () => {
     expect(r.total).toBe(0);
     expect(r.waitedMs).toBe(0);
     expect(rt.count(WAIT_SCRIPT)).toBe(0);
+  });
+
+  it('keeps polling a role= wait until the accessibility query finds the element', async () => {
+    const { engine, rt } = engineWith();
+    rt.roleReplies = [{ attr: null }, { attr: null }, { attr: 'data-bgls-ax-late' }];
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([wireMatch()]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+
+    const r = await engine.waitFor('t1', 'role=button[name="Late one"]', { timeoutMs: 5000 });
+
+    expect(r.total).toBe(1);
+    expect(rt.roleCalls).toHaveLength(3);
+    expect(r.checks).toBe(3);
+    expect(rt.count(WAIT_SCRIPT)).toBe(1);
+  });
+
+  it('fails a role= wait that never matches only after polling, reporting every check', async () => {
+    const { engine, rt } = engineWith();
+    rt.roleReplies = [{ attr: null }];
+
+    const err = await engine
+      .waitFor('t1', 'role=dialog', { timeoutMs: 1000 })
+      .catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: 'NOT_FOUND' });
+    expect(rt.roleCalls.length).toBeGreaterThan(1);
+    expect((err as { details: { checks: number } }).details.checks).toBe(rt.roleCalls.length);
+  });
+
+  it('re-queries the accessibility tree when a role= wait slice times out', async () => {
+    const { engine, rt } = engineWith();
+    rt.roleReplies = [{ attr: 'data-bgls-ax-a' }, { attr: 'data-bgls-ax-b' }];
+    rt.waitReplies = [
+      { timedOut: true, result: wireResult([]), waitedMs: 1000, checks: 10, wakes: 0 },
+      { timedOut: false, result: wireResult([wireMatch()]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+
+    const r = await engine.waitFor('t1', 'role=button', { timeoutMs: 5000 });
+
+    expect(r.total).toBe(1);
+    expect(rt.roleCalls).toHaveLength(2);
+    expect(rt.lastSpec(WAIT_SCRIPT)['deadlineMs']).toBeLessThanOrEqual(1000);
   });
 
   it("waitFor(state: 'visible') times out immediately when role= matches nothing, without spending the deadline", async () => {

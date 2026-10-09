@@ -62,6 +62,10 @@ WAIT_EVALUATE_MARGIN_MS = 2000
 # Default overall deadline for click/fill/select.
 DEFAULT_ACT_TIMEOUT_MS = 8000
 
+# How long one in-page wait slice runs when the selector has a ``role=``
+# segment, before the accessibility query is repeated. See ``wait_for``.
+ROLE_REQUERY_MS = 1000
+
 # The world every one of this engine's own six fixed scripts runs in.
 #
 # ``"isolated"``, and this is the single most consequential default in the
@@ -357,73 +361,108 @@ class LocatorEngine:
         segments = parse_selector(selector)
         state = opts.get("state", "visible")
         asked_ms = opts.get("timeout_ms", self._rt.default_timeout_ms)
-        deadline_ms = max(0.0, min(asked_ms, MAX_EVALUATE_TIMEOUT_MS - WAIT_EVALUATE_MARGIN_MS))
-
-        effective = await self._prepare_selector(target_id, selector, segments, deadline_ms)
-        if effective is None:
-            # A `role=` segment matched nothing. `detached` and `hidden` are
-            # satisfied by an empty match set and succeed immediately; every
-            # other state cannot be reached from zero matches and fails
-            # immediately, both without spending the deadline finding that
-            # out the slow way.
-            observed = replace(_empty_result(selector), engine=terminal_engine(segments), segments=len(segments))
-            if state in ("detached", "hidden"):
-                return WaitForResult(
-                    **{f.name: getattr(observed, f.name) for f in observed.__dataclass_fields__.values()},  # type: ignore[attr-defined]
-                    waited_ms=0,
-                    checks=0,
-                    wakes=0,
-                )
-            raise self._wait_timeout_error(selector, state, observed, {"checks": 0, "wakes": 0}, 0)
-
-        wants_full_measure = state == "actionable"
-        check = self._build_resolve_spec(
-            effective,
-            {
-                **opts,
-                "stamp": False,
-                "stable": wants_full_measure and opts.get("stable", True) is not False,
-                "hit_test": wants_full_measure and opts.get("hit_test", True) is not False,
-            },
-        )
-        stamp_spec = None if opts.get("stamp") is False else self._build_resolve_spec(effective, {**opts, "stamp": True})
-
+        budget_ms = max(0.0, min(asked_ms, MAX_EVALUATE_TIMEOUT_MS - WAIT_EVALUATE_MARGIN_MS))
+        poll_ms = opts.get("poll_ms", 100)
         started = time.time() * 1000
-        wire = await self._rt.evaluate_function(
-            target_id,
-            WAIT_SCRIPT,
-            [
-                {
-                    "check": check,
-                    "stamp": stamp_spec,
-                    "state": state,
-                    "deadlineMs": deadline_ms,
-                    "pollMs": opts.get("poll_ms", 100),
-                    "index": opts.get("index"),
-                }
-            ],
-            deadline_ms + WAIT_EVALUATE_MARGIN_MS,
-            world=ENGINE_WORLD,
-        )
+        overall_deadline = started + budget_ms
+        # A ``role=`` segment is resolved by an accessibility query BEFORE
+        # the in-page wait, which then watches only the elements that query
+        # stamped. An element that appears later has no stamp, so with a
+        # role segment the in-page wait runs in slices and each slice starts
+        # with a fresh query. See engine.ts's ``waitForHop``.
+        has_role = any(seg.engine == "role" for seg in segments)
+        slice_ms = ROLE_REQUERY_MS if has_role else float("inf")
+        # Bounded by a count as well as the clock, so a fake clock that does
+        # not move cannot spin this forever.
+        max_rounds = int(budget_ms / min(poll_ms, 250)) + 2
+        checks = 0
+        wakes = 0
+        last_observed: Optional[ResolveResult] = None
+        round_no = 0
 
-        if wire.get("failed") is True:
-            raise AutomationError(
-                "INVALID_ARGUMENT",
-                f"waitFor('{selector}'): the page could not evaluate the selector: {wire.get('error', 'unknown')}",
-                {"selector": selector, "state": state, "pageError": wire.get("error")},
+        while True:
+            deadline_ms = max(0.0, overall_deadline - time.time() * 1000)
+            out_of_time = deadline_ms <= 0 or round_no >= max_rounds
+            round_no += 1
+
+            effective = await self._prepare_selector(target_id, selector, segments, deadline_ms)
+
+            if effective is None:
+                # A ``role=`` segment matched nothing. ``detached`` and
+                # ``hidden`` are satisfied by an empty match set; every other
+                # state keeps polling until the deadline, like a CSS selector
+                # that matches nothing yet.
+                checks += 1
+                observed = replace(_empty_result(selector), engine=terminal_engine(segments), segments=len(segments))
+                if state in ("detached", "hidden"):
+                    return WaitForResult(
+                        **{f.name: getattr(observed, f.name) for f in observed.__dataclass_fields__.values()},  # type: ignore[attr-defined]
+                        waited_ms=time.time() * 1000 - started,
+                        checks=checks,
+                        wakes=wakes,
+                    )
+                if out_of_time:
+                    raise self._wait_timeout_error(
+                        selector, state, last_observed or observed, {"checks": checks, "wakes": wakes}, time.time() * 1000 - started
+                    )
+                await self._rt.sleep(min(max(poll_ms, 250), deadline_ms))
+                continue
+
+            wants_full_measure = state == "actionable"
+            check = self._build_resolve_spec(
+                effective,
+                {
+                    **opts,
+                    "stamp": False,
+                    "stable": wants_full_measure and opts.get("stable", True) is not False,
+                    "hit_test": wants_full_measure and opts.get("hit_test", True) is not False,
+                },
+            )
+            stamp_spec = None if opts.get("stamp") is False else self._build_resolve_spec(effective, {**opts, "stamp": True})
+
+            slice_deadline_ms = min(deadline_ms, slice_ms)
+            wire = await self._rt.evaluate_function(
+                target_id,
+                WAIT_SCRIPT,
+                [
+                    {
+                        "check": check,
+                        "stamp": stamp_spec,
+                        "state": state,
+                        "deadlineMs": slice_deadline_ms,
+                        "pollMs": poll_ms,
+                        "index": opts.get("index"),
+                    }
+                ],
+                slice_deadline_ms + WAIT_EVALUATE_MARGIN_MS,
+                world=ENGINE_WORLD,
             )
 
-        observed = _wire_to_resolve_result(wire["result"], selector) if wire.get("result") else _empty_result(selector)
+            if wire.get("failed") is True:
+                raise AutomationError(
+                    "INVALID_ARGUMENT",
+                    f"waitFor('{selector}'): the page could not evaluate the selector: {wire.get('error', 'unknown')}",
+                    {"selector": selector, "state": state, "pageError": wire.get("error")},
+                )
 
-        if wire.get("timedOut"):
-            raise self._wait_timeout_error(selector, state, observed, wire, time.time() * 1000 - started)
+            checks += wire.get("checks", 0)
+            wakes += wire.get("wakes", 0)
+            observed = _wire_to_resolve_result(wire["result"], selector) if wire.get("result") else _empty_result(selector)
+            last_observed = observed
 
-        return WaitForResult(
-            **{f.name: getattr(observed, f.name) for f in observed.__dataclass_fields__.values()},  # type: ignore[attr-defined]
-            waited_ms=wire["waitedMs"],
-            checks=wire["checks"],
-            wakes=wire["wakes"],
-        )
+            if wire.get("timedOut"):
+                if not out_of_time and has_role and time.time() * 1000 < overall_deadline:
+                    continue
+                raise self._wait_timeout_error(
+                    selector, state, observed, {**wire, "checks": checks, "wakes": wakes}, time.time() * 1000 - started
+                )
+
+            return WaitForResult(
+                **{f.name: getattr(observed, f.name) for f in observed.__dataclass_fields__.values()},  # type: ignore[attr-defined]
+                waited_ms=wire["waitedMs"] if round_no == 1 else time.time() * 1000 - started,
+                checks=checks,
+                wakes=wakes,
+            )
 
     def _wait_timeout_error(
         self,

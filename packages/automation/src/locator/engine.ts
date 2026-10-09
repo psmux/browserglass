@@ -53,6 +53,21 @@ import type {
 const WAIT_EVALUATE_MARGIN_MS = 2000;
 
 /**
+ * How long one in-page wait slice runs when the selector has a `role=`
+ * segment, before the accessibility query is repeated. See `waitForHop`.
+ */
+const ROLE_REQUERY_MS = 1000;
+
+/** Whether a `role=` segment sits before the first `frame=` segment, i.e. one this hop resolves itself. */
+function selectorHasLiveRole(segments: SelectorSegment[]): boolean {
+  for (const seg of segments) {
+    if (seg.engine === 'frame') return false;
+    if (seg.engine === 'role') return true;
+  }
+  return false;
+}
+
+/**
  * The world every one of this engine's own six fixed scripts runs in.
  *
  * `'isolated'`, and this is the single most consequential default in the
@@ -770,114 +785,159 @@ export class LocatorEngine {
     hopDepth: number,
   ): Promise<WaitForResult> {
     const segments = parseSelector(selector);
-    const deadlineMs = Math.max(0, overallDeadline - Date.now());
-
-    const effective = await this.prepareSelector(targetId, selector, segments, deadlineMs);
-    if (effective === null) {
-      // A `role=` segment matched nothing. `detached` and `hidden` are
-      // satisfied by an empty match set (mirroring `bglsSatisfied`'s own
-      // rule for `res.total === 0`) and succeed immediately; every other
-      // state cannot be reached from zero matches and fails immediately,
-      // both without spending the deadline finding that out the slow way.
-      const observed: ResolveResult = {
-        ...emptyResult(selector, targetId),
-        engine: terminalEngine(segments),
-        segments: segments.length,
-      };
-      if (state === 'detached' || state === 'hidden') {
-        return { ...observed, waitedMs: 0, checks: 0, wakes: 0 };
-      }
-      throw this.waitTimeoutError(
-        selector,
-        state,
-        observed,
-        { timedOut: true, result: null, waitedMs: 0, checks: 0, wakes: 0 },
-        0,
-      );
-    }
-
-    // The polling passes deliberately measure less than the final one:
-    // 'attached', 'detached', 'visible' and 'hidden' do not depend on rect
-    // stability or on the hit test, and paying two animation frames plus a
-    // hit test ten times a second for an answer that does not use them is
-    // waste inside the page even when it costs nothing on the socket.
-    const wantsFullMeasure = state === 'actionable';
-    const check = this.buildResolveSpec(effective, {
-      ...opts,
-      stamp: false,
-      stable: wantsFullMeasure && opts?.stable !== false,
-      hitTest: wantsFullMeasure && opts?.hitTest !== false,
-    });
-    const stampSpec =
-      opts?.stamp === false ? null : this.buildResolveSpec(effective, { ...opts, stamp: true });
-
     const started = Date.now();
-    const wire = await this.rt.evaluateFunction<WireWaitResult>(
-      targetId,
-      WAIT_SCRIPT,
-      // `index` goes to the page, not just to the client, and it changes
-      // what the wait is waiting FOR. Without it the wait is satisfied the
-      // moment ANY match is actionable, so a caller who named index 0
-      // would be released by index 1 becoming ready and would then have to
-      // fail on its own element. Waiting for the right one is both more
-      // correct and, on a page that renders its fields in order, faster.
-      [
-        {
-          check,
-          stamp: stampSpec,
-          state,
-          deadlineMs,
-          pollMs: opts?.pollMs ?? 100,
-          index: opts?.index ?? null,
-        },
-      ],
-      deadlineMs + WAIT_EVALUATE_MARGIN_MS,
-      ENGINE_WORLD,
-    );
+    const pollMs = opts?.pollMs ?? 100;
+    // A `role=` segment is resolved by an accessibility query BEFORE the
+    // in-page wait starts, and the wait then watches the elements that
+    // query stamped. A matching element that appears later carries no
+    // stamp, so the in-page wait could never see it. With a role segment
+    // in play the in-page wait therefore runs in slices, and every slice
+    // starts with a fresh accessibility query.
+    const hasRole = selectorHasLiveRole(segments);
+    const sliceMs = hasRole ? ROLE_REQUERY_MS : Number.POSITIVE_INFINITY;
+    // Bounded by a count as well as by the clock: the unit tests drive this
+    // with fake clocks that do not always move, and a deadline-only loop
+    // spins forever there (the same trap `fill`'s read-back hit).
+    const maxRounds = Math.ceil(Math.max(0, overallDeadline - started) / Math.min(pollMs, 250)) + 2;
+    let checks = 0;
+    let wakes = 0;
+    let lastObserved: ResolveResult | null = null;
 
-    if (wire.failed === true) {
-      throw new AutomationError(
-        'INVALID_ARGUMENT',
-        `waitFor('${selector}'): the page could not evaluate the selector: ${wire.error ?? 'unknown'}`,
-        { selector, state, pageError: wire.error },
-      );
-    }
+    for (let round = 0; ; round++) {
+      const deadlineMs = Math.max(0, overallDeadline - Date.now());
+      const outOfTime = deadlineMs <= 0 || round >= maxRounds;
 
-    if (wire.frameBoundary) {
-      const hop = await this.enterFrame(
-        targetId,
-        selector,
-        segments,
-        wire.frameBoundary,
-        offset,
-        hopDepth,
-      );
-      return this.waitForHop(
-        hop.targetId,
-        hop.selector,
-        opts,
-        state,
-        overallDeadline,
-        hop.offset,
-        hopDepth + 1,
-      );
-    }
+      const effective = await this.prepareSelector(targetId, selector, segments, deadlineMs);
 
-    const observed: ResolveResult = wire.result
-      ? {
-          ...wire.result,
-          matches: translateMatches(wire.result.matches, offset),
-          selector,
-          resolvedAtMs: Date.now(),
-          resolvedTargetId: targetId,
+      if (effective === null) {
+        // A `role=` segment matched nothing. `detached` and `hidden` are
+        // satisfied by an empty match set (mirroring `bglsSatisfied`'s own
+        // rule for `res.total === 0`) and succeed immediately. Every other
+        // state keeps polling until the deadline, the same as a CSS
+        // selector that matches nothing yet: the element may still be on
+        // its way.
+        checks += 1;
+        const observed: ResolveResult = {
+          ...emptyResult(selector, targetId),
+          engine: terminalEngine(segments),
+          segments: segments.length,
+        };
+        if (state === 'detached' || state === 'hidden') {
+          return { ...observed, waitedMs: Date.now() - started, checks, wakes };
         }
-      : emptyResult(selector, targetId);
+        if (outOfTime) {
+          throw this.waitTimeoutError(
+            selector,
+            state,
+            lastObserved ?? observed,
+            { timedOut: true, result: null, waitedMs: Date.now() - started, checks, wakes },
+            Date.now() - started,
+          );
+        }
+        // An accessibility query is far heavier than an in-page check, so
+        // it is not repeated at the in-page poll rate.
+        await this.rt.sleep(Math.min(Math.max(pollMs, 250), deadlineMs));
+        continue;
+      }
 
-    if (wire.timedOut) {
-      throw this.waitTimeoutError(selector, state, observed, wire, Date.now() - started);
+      // The polling passes deliberately measure less than the final one:
+      // 'attached', 'detached', 'visible' and 'hidden' do not depend on rect
+      // stability or on the hit test, and paying two animation frames plus a
+      // hit test ten times a second for an answer that does not use them is
+      // waste inside the page even when it costs nothing on the socket.
+      const wantsFullMeasure = state === 'actionable';
+      const check = this.buildResolveSpec(effective, {
+        ...opts,
+        stamp: false,
+        stable: wantsFullMeasure && opts?.stable !== false,
+        hitTest: wantsFullMeasure && opts?.hitTest !== false,
+      });
+      const stampSpec =
+        opts?.stamp === false ? null : this.buildResolveSpec(effective, { ...opts, stamp: true });
+
+      const sliceDeadlineMs = Math.min(deadlineMs, sliceMs);
+      const wire = await this.rt.evaluateFunction<WireWaitResult>(
+        targetId,
+        WAIT_SCRIPT,
+        // `index` goes to the page, not just to the client, and it changes
+        // what the wait is waiting FOR. Without it the wait is satisfied the
+        // moment ANY match is actionable, so a caller who named index 0
+        // would be released by index 1 becoming ready and would then have to
+        // fail on its own element. Waiting for the right one is both more
+        // correct and, on a page that renders its fields in order, faster.
+        [
+          {
+            check,
+            stamp: stampSpec,
+            state,
+            deadlineMs: sliceDeadlineMs,
+            pollMs,
+            index: opts?.index ?? null,
+          },
+        ],
+        sliceDeadlineMs + WAIT_EVALUATE_MARGIN_MS,
+        ENGINE_WORLD,
+      );
+
+      if (wire.failed === true) {
+        throw new AutomationError(
+          'INVALID_ARGUMENT',
+          `waitFor('${selector}'): the page could not evaluate the selector: ${wire.error ?? 'unknown'}`,
+          { selector, state, pageError: wire.error },
+        );
+      }
+
+      if (wire.frameBoundary) {
+        const hop = await this.enterFrame(
+          targetId,
+          selector,
+          segments,
+          wire.frameBoundary,
+          offset,
+          hopDepth,
+        );
+        return this.waitForHop(
+          hop.targetId,
+          hop.selector,
+          opts,
+          state,
+          overallDeadline,
+          hop.offset,
+          hopDepth + 1,
+        );
+      }
+
+      checks += wire.checks;
+      wakes += wire.wakes;
+      const observed: ResolveResult = wire.result
+        ? {
+            ...wire.result,
+            matches: translateMatches(wire.result.matches, offset),
+            selector,
+            resolvedAtMs: Date.now(),
+            resolvedTargetId: targetId,
+          }
+        : emptyResult(selector, targetId);
+      lastObserved = observed;
+
+      if (wire.timedOut) {
+        if (!outOfTime && hasRole && Date.now() < overallDeadline) continue;
+        throw this.waitTimeoutError(
+          selector,
+          state,
+          observed,
+          { ...wire, checks, wakes },
+          Date.now() - started,
+        );
+      }
+
+      return {
+        ...observed,
+        waitedMs: round === 0 ? wire.waitedMs : Date.now() - started,
+        checks,
+        wakes,
+      };
     }
-
-    return { ...observed, waitedMs: wire.waitedMs, checks: wire.checks, wakes: wire.wakes };
   }
 
   /**
