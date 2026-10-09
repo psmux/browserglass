@@ -8360,7 +8360,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Restrict to nodes whose computed accessible name EXACTLY equals this. `Accessibility.queryAXTree`'s own matching, not a substring or normalised match; see `role=`'s own client-side doc for the practical difference from Playwright's `get_by_role`."
+          "description": "Restrict to nodes whose computed accessible name equals this once whitespace is trimmed and collapsed on both sides (Chrome reports names like \" Login\" for a button with an icon before its label). A whole-name, case sensitive match, not a substring; the same rule as Playwright's `get_by_role(name=..., exact=True)`."
         },
         "maxNodes": {
           "type": "number",

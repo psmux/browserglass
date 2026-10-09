@@ -143,7 +143,7 @@ export interface AxTreeNode {
 export interface AxQueryRequest {
   /** Exact match against Chrome's own computed role. Omit for every role. */
   readonly role?: string;
-  /** Exact match against Chrome's own computed accessible name. Omit for every name. */
+  /** Match against Chrome's own computed accessible name, exact after trimming and collapsing whitespace on both sides (see {@link normalizeAxName}). Omit for every name. */
   readonly name?: string;
   /** Cap on returned nodes, applied after {@link maxResultBytes}; see {@link AxQueryOutcome.truncated}. */
   readonly maxNodes: number;
@@ -233,6 +233,15 @@ function shapeNode(raw: RawAxNode): AxTreeNode | null {
 }
 
 /** UTF-8 byte length, mirroring `packages/core/src/cdp/evaluate.ts`'s own `utf8ByteLength` (duplicated rather than shared: that module is not exported for reuse, and the two have no other reason to depend on each other). */
+/**
+ * Trims and collapses every run of whitespace to one space, the same
+ * normalisation Playwright applies to accessible names before comparing
+ * them. Applied to both the requested name and Chrome's computed one.
+ */
+export function normalizeAxName(name: string): string {
+  return name.replace(/\s+/g, ' ').trim();
+}
+
 /** Chrome's answer when a `nodeId` or `backendNodeId` no longer names a node in the current document. */
 function isStaleNodeError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
@@ -293,7 +302,10 @@ export async function queryAccessibilityTree(
         params['backendNodeId'] = doc.root.backendNodeId;
       else if (typeof doc.root?.nodeId === 'number') params['nodeId'] = doc.root.nodeId;
       if (req.role !== undefined) params['role'] = req.role;
-      if (req.name !== undefined) params['accessibleName'] = req.name;
+      // No `accessibleName` here: Chrome matches it byte for byte, and the
+      // names it computes keep stray whitespace (the-internet's Login button
+      // is " Login", from an icon element and a space before the word). The
+      // name is matched below instead, whitespace normalised on both sides.
       return (await bridge.send('Accessibility.queryAXTree', params, sessionId)) as {
         nodes?: RawAxNode[];
       };
@@ -305,11 +317,14 @@ export async function queryAccessibilityTree(
       if (!isStaleNodeError(err)) throw err;
       raw = await queryOnce();
     }
+    const wantName = req.name !== undefined ? normalizeAxName(req.name) : undefined;
     const shaped: AxTreeNode[] = [];
     for (const n of raw.nodes ?? []) {
       if (n.ignored === true) continue;
       const node = shapeNode(n);
-      if (node !== null) shaped.push(node);
+      if (node === null) continue;
+      if (wantName !== undefined && normalizeAxName(node.name) !== wantName) continue;
+      shaped.push(node);
     }
     const total = shaped.length;
 

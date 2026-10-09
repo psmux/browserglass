@@ -154,7 +154,7 @@ export interface PageA11yGet extends Envelope {
   targetId: string;
   /** Restrict to nodes whose computed role EXACTLY equals this (Chrome's own AX role vocabulary, which matches WAI-ARIA role names for the common interactive roles). Omit for every role. */
   role?: string;
-  /** Restrict to nodes whose computed accessible name EXACTLY equals this. `Accessibility.queryAXTree`'s own matching, not a substring or normalised match; see `role=`'s own client-side doc for the practical difference from Playwright's `get_by_role`. */
+  /** Restrict to nodes whose computed accessible name equals this once whitespace is trimmed and collapsed on both sides (Chrome reports names like " Login" for a button with an icon before its label). A whole-name, case sensitive match, not a substring; the same rule as Playwright's `get_by_role(name=..., exact=True)`. */
   name?: string;
   /** Cap on returned nodes, before the {@link MAX_A11Y_RESULT_BYTES} byte ceiling is also applied. Default {@link DEFAULT_A11Y_MAX_NODES}, capped server side at {@link MAX_A11Y_MAX_NODES}. `PageA11yGot.total` still reports the real match count. */
   maxNodes?: number;

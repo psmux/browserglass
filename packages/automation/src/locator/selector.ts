@@ -162,7 +162,7 @@ export function parseSelector(selector: string): SelectorSegment[] {
   return segments;
 }
 
-/** One `role=` segment's filter: an exact role, and an optional exact accessible name. */
+/** One `role=` segment's filter: an exact role, and an optional accessible name matched whole after whitespace normalisation. */
 export interface RoleFilter {
   role: string;
   name: string | null;
