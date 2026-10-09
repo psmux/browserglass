@@ -59,12 +59,17 @@ async function waitUntil(
   return predicate();
 }
 
+// Headful Chrome cannot start on Linux without a display server; CI runs this file under xvfb-run.
+const noDisplay =
+  process.platform === 'linux' && !process.env['DISPLAY'] && !process.env['WAYLAND_DISPLAY'];
+
 let gateway: RealGateway;
 let fixture: FixtureServer;
 let client: BrowserGlassClient;
 let instanceId: InstanceId;
 
 beforeAll(async () => {
+  if (noDisplay) return;
   [gateway, fixture] = await Promise.all([
     // `headless: 'off'` is load-bearing: see the module doc. `isolation:
     // 'window'` is what makes every streamed target its own OS window, the
@@ -91,102 +96,105 @@ afterAll(async () => {
   await fixture?.close();
 }, 120_000);
 
-describe('a browser that lost every window comes back transparently on the next target.new', () => {
-  it('closing every pane leaves no window behind, and a single target.new after that relaunches and streams', async () => {
-    // Whatever the launch opened by default plus one extra tab: at least
-    // two real OS windows to close at once, matching "closing ...
-    // parallelly simultaneously" rather than a single-tab edge case.
-    const startingIds = client.targets.map((t) => t.targetId);
-    if (startingIds.length < 2) {
-      const created = await client.tabs.new({ url: fixture.pageUrl('seed') });
-      startingIds.push(created.targetId);
-    }
-    expect(startingIds.length).toBeGreaterThanOrEqual(2);
+describe.skipIf(noDisplay)(
+  'a browser that lost every window comes back transparently on the next target.new',
+  () => {
+    it('closing every pane leaves no window behind, and a single target.new after that relaunches and streams', async () => {
+      // Whatever the launch opened by default plus one extra tab: at least
+      // two real OS windows to close at once, matching "closing ...
+      // parallelly simultaneously" rather than a single-tab edge case.
+      const startingIds = client.targets.map((t) => t.targetId);
+      if (startingIds.length < 2) {
+        const created = await client.tabs.new({ url: fixture.pageUrl('seed') });
+        startingIds.push(created.targetId);
+      }
+      expect(startingIds.length).toBeGreaterThanOrEqual(2);
 
-    await Promise.all(startingIds.map((targetId) => client.tabs.close(targetId)));
+      await Promise.all(startingIds.map((targetId) => client.tabs.close(targetId)));
 
-    // No anchor tab left behind: every pane closed really means every
-    // window closed, not "every window but one the server kept open on
-    // its own account."
-    const noneLeft = await waitUntil(() => client.targets.length === 0, 5000);
-    expect(noneLeft).toBe(true);
-    expect(client.targets).toEqual([]);
+      // No anchor tab left behind: every pane closed really means every
+      // window closed, not "every window but one the server kept open on
+      // its own account."
+      const noneLeft = await waitUntil(() => client.targets.length === 0, 5000);
+      expect(noneLeft).toBe(true);
+      expect(client.targets).toEqual([]);
 
-    // The moment of the defect: Chrome has already quit (its last window
-    // just closed), so the CDP WebSocket this session's `Session` holds
-    // is dead. Before the fix, this next call rejected outright with
-    // `CdpError: Target.createTarget rejected, the bridge closed`.
-    const reopened = await client.tabs.new({ url: fixture.animatedUrl('reopened') });
-    expect(reopened.targetId).toBeTruthy();
-    // `isolation: 'window'` still applies to the relaunched browser: the
-    // fix must not silently fall back to tab isolation.
-    expect(typeof reopened.windowId).toBe('number');
+      // The moment of the defect: Chrome has already quit (its last window
+      // just closed), so the CDP WebSocket this session's `Session` holds
+      // is dead. Before the fix, this next call rejected outright with
+      // `CdpError: Target.createTarget rejected, the bridge closed`.
+      const reopened = await client.tabs.new({ url: fixture.animatedUrl('reopened') });
+      expect(reopened.targetId).toBeTruthy();
+      // `isolation: 'window'` still applies to the relaunched browser: the
+      // fix must not silently fall back to tab isolation.
+      expect(typeof reopened.windowId).toBe('number');
 
-    // Real liveness, not just a well-shaped reply: a real
-    // `Page.captureScreenshot` round trip against the relaunched
-    // browser's CDP session, the same proof `reply-correlation.test.ts`
-    // uses ("capture.blob.size > 0" is a real screenshot, not an empty
-    // placeholder).
-    const capture = await client.capture(reopened.targetId);
-    expect(capture.targetId).toBe(reopened.targetId);
-    expect(capture.blob.size).toBeGreaterThan(0);
-    await client.tabs.close(reopened.targetId);
-  }, 90_000);
-
-  it('three target.new calls that race after every pane is closed relaunch exactly once and all three come back, on the same connection', async () => {
-    const remaining = client.targets.map((t) => t.targetId);
-    if (remaining.length > 0) {
-      await Promise.all(remaining.map((targetId) => client.tabs.close(targetId)));
-      await waitUntil(() => client.targets.length === 0, 5000);
-    }
-    expect(client.targets).toEqual([]);
-
-    // The scenario being reproduced: a user opens three panes at
-    // once. No await between these three calls: `Promise.all` starts
-    // them all before any of them resolves, which is what actually
-    // exercises the single-flight guard in `Session.createTarget()`
-    // rather than three sequential relaunches that happen to each
-    // succeed on their own.
-    const created = await Promise.all([
-      client.tabs.new({ url: fixture.animatedUrl('race-0') }),
-      client.tabs.new({ url: fixture.animatedUrl('race-1') }),
-      client.tabs.new({ url: fixture.animatedUrl('race-2') }),
-    ]);
-
-    expect(created).toHaveLength(3);
-    const ids = created.map((t) => t.targetId);
-    expect(new Set(ids).size).toBe(3);
-    for (const t of created) {
-      expect(typeof t.windowId).toBe('number');
-    }
-
-    // Every target genuinely exists in the relaunched browser: a real
-    // `Page.captureScreenshot` against each one, on the exact same
-    // `client`/socket this suite connected at the top of the file. If
-    // the viewer had been forced to reconnect, `client.capture` below
-    // would be operating on a stale or dead transport and would time out
-    // or throw.
-    //
-    // Sequential, not `Promise.all`: `target.capture` is rate limited to
-    // `captureRatePerSec: 1` per viewer (`@browserglass/protocol`'s
-    // `DEFAULT_LIMITS`), which is a wire-layer concern unrelated to the
-    // relaunch fix under test here; three at once trips it and answers
-    // with `bgls.error.rate_limited` instead of a screenshot. The
-    // `target.new` race just above stays fully concurrent, since that is
-    // the actual behaviour this file exists to prove.
-    //
-    // The leading sleep is the same rate limit's own recovery, not the
-    // fix under test: the previous `it()` already spent this connection's
-    // one `capture` token, and a fast relaunch (this one, reusing a
-    // recently-launched profile) can land here well under the 1 token per
-    // second refill.
-    await sleep(1100);
-    for (const targetId of ids) {
-      const capture = await client.capture(targetId);
+      // Real liveness, not just a well-shaped reply: a real
+      // `Page.captureScreenshot` round trip against the relaunched
+      // browser's CDP session, the same proof `reply-correlation.test.ts`
+      // uses ("capture.blob.size > 0" is a real screenshot, not an empty
+      // placeholder).
+      const capture = await client.capture(reopened.targetId);
+      expect(capture.targetId).toBe(reopened.targetId);
       expect(capture.blob.size).toBeGreaterThan(0);
-      await sleep(1100);
-    }
+      await client.tabs.close(reopened.targetId);
+    }, 90_000);
 
-    await Promise.all(ids.map((targetId) => client.tabs.close(targetId)));
-  }, 120_000);
-});
+    it('three target.new calls that race after every pane is closed relaunch exactly once and all three come back, on the same connection', async () => {
+      const remaining = client.targets.map((t) => t.targetId);
+      if (remaining.length > 0) {
+        await Promise.all(remaining.map((targetId) => client.tabs.close(targetId)));
+        await waitUntil(() => client.targets.length === 0, 5000);
+      }
+      expect(client.targets).toEqual([]);
+
+      // The scenario being reproduced: a user opens three panes at
+      // once. No await between these three calls: `Promise.all` starts
+      // them all before any of them resolves, which is what actually
+      // exercises the single-flight guard in `Session.createTarget()`
+      // rather than three sequential relaunches that happen to each
+      // succeed on their own.
+      const created = await Promise.all([
+        client.tabs.new({ url: fixture.animatedUrl('race-0') }),
+        client.tabs.new({ url: fixture.animatedUrl('race-1') }),
+        client.tabs.new({ url: fixture.animatedUrl('race-2') }),
+      ]);
+
+      expect(created).toHaveLength(3);
+      const ids = created.map((t) => t.targetId);
+      expect(new Set(ids).size).toBe(3);
+      for (const t of created) {
+        expect(typeof t.windowId).toBe('number');
+      }
+
+      // Every target genuinely exists in the relaunched browser: a real
+      // `Page.captureScreenshot` against each one, on the exact same
+      // `client`/socket this suite connected at the top of the file. If
+      // the viewer had been forced to reconnect, `client.capture` below
+      // would be operating on a stale or dead transport and would time out
+      // or throw.
+      //
+      // Sequential, not `Promise.all`: `target.capture` is rate limited to
+      // `captureRatePerSec: 1` per viewer (`@browserglass/protocol`'s
+      // `DEFAULT_LIMITS`), which is a wire-layer concern unrelated to the
+      // relaunch fix under test here; three at once trips it and answers
+      // with `bgls.error.rate_limited` instead of a screenshot. The
+      // `target.new` race just above stays fully concurrent, since that is
+      // the actual behaviour this file exists to prove.
+      //
+      // The leading sleep is the same rate limit's own recovery, not the
+      // fix under test: the previous `it()` already spent this connection's
+      // one `capture` token, and a fast relaunch (this one, reusing a
+      // recently-launched profile) can land here well under the 1 token per
+      // second refill.
+      await sleep(1100);
+      for (const targetId of ids) {
+        const capture = await client.capture(targetId);
+        expect(capture.blob.size).toBeGreaterThan(0);
+        await sleep(1100);
+      }
+
+      await Promise.all(ids.map((targetId) => client.tabs.close(targetId)));
+    }, 120_000);
+  },
+);

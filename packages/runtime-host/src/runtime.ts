@@ -36,6 +36,7 @@ import type { HostRuntimeConfig } from './config.js';
 import {
   cdpTimeoutError,
   foreignOwnerError,
+  noDisplayError,
   noValidLeaseError,
   profileLockedError,
   stealthArgDeniedError,
@@ -55,6 +56,32 @@ interface LiveEntry {
   handle: LaunchedBrowser;
   supervisor: BrowserSupervisor;
   exitListeners: Set<(info: ExitInfo) => void>;
+}
+
+/** How long a reaped orphan gets to exit on SIGTERM before the reap escalates to SIGKILL. */
+const ORPHAN_SIGTERM_GRACE_MS = 3000;
+
+/**
+ * Waits until no browser main process holds `profilePath`, escalating to
+ * SIGKILL after {@link ORPHAN_SIGTERM_GRACE_MS}. Without this the launch
+ * that follows a reap races the dying process for the profile's
+ * SingletonLock, and on Linux the dying process usually wins. Returns
+ * quietly at `deadlineAt`: whatever still holds the profile then is
+ * reported by the launch's own CDP wait, with better context than this
+ * could give.
+ */
+async function waitForProfileRelease(profilePath: string, deadlineAt: number): Promise<void> {
+  const escalateAt = Date.now() + ORPHAN_SIGTERM_GRACE_MS;
+  let escalated = false;
+  while (Date.now() < deadlineAt) {
+    const holders = await chromeProcsForDataDirAsync(profilePath, { maxAgeMs: 0 });
+    if (holders.length === 0) return;
+    if (!escalated && Date.now() >= escalateAt) {
+      escalated = true;
+      await Promise.all(holders.map((p) => killProcessTree(p.pid, 'SIGKILL')));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
 }
 
 /** Everything {@link HostRuntime}'s handle construction needs beyond what `LaunchedBrowser` itself carries, kept out of the public handle shape rather than smuggled onto it. */
@@ -257,12 +284,39 @@ export class HostRuntime implements BrowserRuntime {
     // `stealth.ts`'s own doc comment).
     const stealthProfile = resolveRequiredStealthProfile(this.config, req.spec);
 
+    // Headful Chrome on Linux with no display prints "Missing X server or
+    // $DISPLAY" and exits, which would otherwise surface 45 seconds later
+    // as a CDP timeout that says nothing about the cause.
+    if (
+      req.spec.headless === 'off' &&
+      platform() === 'linux' &&
+      !process.env['DISPLAY'] &&
+      !process.env['WAYLAND_DISPLAY']
+    ) {
+      throw noDisplayError();
+    }
+
     const resolved = await timed('preflight', () =>
       resolveChromeBinary(req.spec.channel, this.config.binaries),
     );
 
     await timed('reconcile', async () => {
       const preExisting = await chromeProcsForDataDirAsync(req.profile.path, { maxAgeMs: 0 });
+      // Pids this runtime still supervises. A process parented to us that
+      // is NOT in here is one we spawned and then let go of (a `'detach'`
+      // terminate, or a launch that failed after spawn). On POSIX its ppid
+      // stays this process for as long as we live, so `classifyChromeProcess`
+      // calls it `ownedByUs`, and leaving it alone means the new Chrome
+      // finds the profile's SingletonLock held, forwards its arguments to
+      // the old process and exits, and this launch never sees a
+      // DevToolsActivePort. Windows hid this because Chrome's launch handoff
+      // leaves the browser main parented to a vanished pid, which classifies
+      // as `orphan` already.
+      const supervisedPids = new Set<number>();
+      for (const entry of this.live.values()) {
+        if (entry.handle.pid !== null) supervisedPids.add(entry.handle.pid);
+      }
+      const toReap: number[] = [];
       for (const proc of preExisting) {
         const classification = classifyChromeProcess(proc, {
           currentlyLaunchingPids: this.currentlyLaunchingPids,
@@ -273,9 +327,16 @@ export class HostRuntime implements BrowserRuntime {
             preExisting.map((p) => p.pid),
           );
         }
-        if (classification === 'orphan') {
-          await killProcessTree(proc.pid, 'SIGTERM');
+        if (
+          classification === 'orphan' ||
+          (classification === 'ownedByUs' && !supervisedPids.has(proc.pid))
+        ) {
+          toReap.push(proc.pid);
         }
+      }
+      if (toReap.length > 0) {
+        await Promise.all(toReap.map((pid) => killProcessTree(pid, 'SIGTERM')));
+        await waitForProfileRelease(req.profile.path, req.deadlineAt);
       }
       unlinkStaleDevToolsActivePort(req.profile.path);
 
