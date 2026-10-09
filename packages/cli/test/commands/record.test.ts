@@ -4,11 +4,11 @@ import { join } from 'node:path';
 import { MsgType, PayloadCodec, encodeBinaryHeader } from '@browserglass/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  imageBytesOf,
   recordExportCommand,
   recordListCommand,
   recordReplayCommand,
   recordStartCommand,
-  imageBytesOf,
   recordStopCommand,
   runRecordExport,
 } from '../../src/commands/record.js';
