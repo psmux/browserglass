@@ -260,7 +260,13 @@ export function createBrowserGlass(config: BrowserGlassConfig): BrowserGlass {
   // set an entry when a viewer socket completes its hello, and
   // `detachViewer` deletes it, called from `ws/connection.ts`'s
   // `onSocketClosed`. It moves with real sockets, unlike the several
-  // viewer signals in this codebase that are permanently zero.
+  // viewer signals in this codebase that are permanently zero. The port
+  // reads `openViewerCount`, which also skips a connection whose peer has
+  // sent its close frame but whose `close` event has not fired yet: that
+  // peer is the caller about to release, and counting it answered
+  // `detached` to a script that had just closed its own socket. The
+  // router covers the remaining gap (a close frame still in flight when
+  // the release lands) by waiting `releaseViewerSettleMs` for the count.
   //
   // Zero for an instance with no `ManagedSession` is a deliberate choice,
   // not an accident of `?? 0`. Two reasons. First, a session exists in
@@ -276,7 +282,7 @@ export function createBrowserGlass(config: BrowserGlassConfig): BrowserGlass {
   // same instance would read zero here, and the port's shape (a number,
   // with no way to say "unknown") gives no way to express that.
   const liveViewers: LiveViewerPort = {
-    countFor: (instanceId) => sessionRegistry.get(instanceId)?.viewerCount ?? 0,
+    countFor: (instanceId) => sessionRegistry.get(instanceId)?.openViewerCount ?? 0,
   };
 
   // The upload staging area, built here and shared by BOTH on-ramps: the

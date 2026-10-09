@@ -98,6 +98,16 @@ export interface RouterConfig {
    * writes bounded regardless of how often the caller signals activity.
    */
   activityTouchThrottleMs: number;
+  /**
+   * How long a non forced `release()` waits for a non zero live viewer
+   * count to fall to zero before it answers `detached`. A script that
+   * closes its own socket and then releases at once used to find that
+   * socket still counted (the server only drops a viewer once the close
+   * handshake finishes), so the browser it meant to end kept running.
+   * Polled every 50 ms, so a release nobody else is watching pays only as
+   * long as its own socket takes to go away. 0 turns the wait off.
+   */
+  releaseViewerSettleMs: number;
 
   // drain
   drainDefaultDeadlineMs: number;
@@ -164,6 +174,7 @@ export const DEFAULT_ROUTER_CONFIG: RouterConfig = Object.freeze({
 
   drainDefaultDeadlineMs: 900_000,
   drainForceGraceMs: 300_000,
+  releaseViewerSettleMs: 1_500,
   drainConcurrency: 2,
 
   idRetentionDays: 30,

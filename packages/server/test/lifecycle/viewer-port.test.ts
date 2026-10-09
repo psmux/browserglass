@@ -108,6 +108,7 @@ function routerOver(
   viewers: LiveViewerPort,
   instanceId: string,
   tenantId: TenantId,
+  releaseViewerSettleMs = 200,
 ): { router: BrowserRouter; terminated: string[]; transitions: string[] } {
   const terminated: string[] = [];
   const transitions: string[] = [];
@@ -162,6 +163,7 @@ function routerOver(
     metrics: noopMetricsSink,
     clock: systemClock,
     viewers,
+    config: { releaseViewerSettleMs },
   });
 
   return { router, terminated, transitions };
@@ -174,7 +176,7 @@ describe('the LiveViewerPort src/index.ts wires into BrowserRouter', () => {
     // it is written out rather than imported: there is nothing to import,
     // the port is three tokens long and belongs at the wiring site.
     const port: LiveViewerPort = {
-      countFor: (instanceId) => gw.sessionRegistry.get(instanceId)?.viewerCount ?? 0,
+      countFor: (instanceId) => gw.sessionRegistry.get(instanceId)?.openViewerCount ?? 0,
     };
     const principal = {
       tenantId: gw.tenantId,
@@ -234,6 +236,37 @@ describe('the LiveViewerPort src/index.ts wires into BrowserRouter', () => {
     expect(wired.transitions).toEqual(['draining', 'released']);
   });
 
+  it('a caller that closes its own socket and releases at once ends the browser', async () => {
+    // The script shape that used to leak a browser: connect, work, close
+    // the client, release, all without waiting for anything in between.
+    // The release used to land while the server still counted the socket
+    // the caller had just closed, and answered `detached`.
+    const port: LiveViewerPort = {
+      countFor: (instanceId) => gw.sessionRegistry.get(instanceId)?.openViewerCount ?? 0,
+    };
+    const principal = {
+      tenantId: gw.tenantId,
+      appId: gw.appId,
+      sub: 'u1',
+      caps: [],
+    } as unknown as Principal;
+    const viewer = await openViewer('viewer-one');
+    await waitForCount(port, gw.instanceId, 1);
+
+    // The production default settle window, not the short one the other
+    // tests use.
+    const wired = routerOver(port, gw.instanceId, gw.tenantId as TenantId, 1_500);
+    viewer.close();
+    const result = await wired.router.release(
+      gw.instanceId as InstanceId,
+      { reason: 'user_closed' },
+      principal,
+    );
+
+    expect(result.outcome).toBe('terminated');
+    expect(wired.terminated).toEqual([gw.instanceId]);
+  });
+
   it('an unwired router terminates with viewers still attached, which is the defect the wiring closes', async () => {
     // The control case. `viewers` left out entirely is what
     // `buildRouterWiring` produced before the fix, and the router's own
@@ -246,7 +279,7 @@ describe('the LiveViewerPort src/index.ts wires into BrowserRouter', () => {
     } as unknown as Principal;
     const viewer = await openViewer('viewer-one');
     const port: LiveViewerPort = {
-      countFor: (instanceId) => gw.sessionRegistry.get(instanceId)?.viewerCount ?? 0,
+      countFor: (instanceId) => gw.sessionRegistry.get(instanceId)?.openViewerCount ?? 0,
     };
     await waitForCount(port, gw.instanceId, 1);
 

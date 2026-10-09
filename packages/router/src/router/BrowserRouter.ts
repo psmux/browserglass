@@ -121,6 +121,8 @@ import {
 const IDLE_GRACE_MS_DEFAULT = 600_000;
 /** The idle threshold fallback when a pool has no `limits.sessionIdleMs` configured, default 1800000 (30 minutes). */
 const DEFAULT_IDLE_MS = 1_800_000;
+/** How often `release()` re-reads the live viewer count while it waits for a closing socket to drop out. */
+const RELEASE_VIEWER_POLL_MS = 50;
 
 /**
  * `BrowserRouter`'s constructor options, plus the single node addition
@@ -1623,6 +1625,32 @@ export class BrowserRouter {
   // ── release ───────────────────────────────────────────────────────────
 
   /**
+   * The live viewer count for `release()`'s viewer gate, given up to
+   * `config.releaseViewerSettleMs` to reach zero. The count lags a closing
+   * socket: the caller that just closed its own viewer connection and then
+   * asked for a release is still counted until the server sees that
+   * socket's close finish, and reading the count once at that instant
+   * answered `detached` and left the browser running. A viewer somebody
+   * else still holds does not go away inside the window, so the gate
+   * still protects them; the cost is that a genuine `detached` answer
+   * arrives `releaseViewerSettleMs` later.
+   */
+  private async settledViewerCount(instanceId: InstanceId): Promise<number> {
+    let count = this.viewers.countFor(instanceId);
+    const settleMs = this.config.releaseViewerSettleMs;
+    if (count === 0 || settleMs <= 0) return count;
+    const deadline = this.clock.now() + settleMs;
+    while (count > 0 && this.clock.now() < deadline) {
+      const stepMs = Math.min(RELEASE_VIEWER_POLL_MS, deadline - this.clock.now());
+      await new Promise<void>((resolve) => {
+        this.clock.setTimeout(resolve, stepMs);
+      });
+      count = this.viewers.countFor(instanceId);
+    }
+    return count;
+  }
+
+  /**
    * The nine step release sequence. Step 5 (kill the Chrome process group, not just the
    * parent pid) is `LocalNode`/the injected `BrowserRuntime`'s
    * responsibility via `LaunchedBrowser.teardown`; this method drives the
@@ -1692,7 +1720,7 @@ export class BrowserRouter {
     // down must stay drivable and stay reusable for everyone still on it,
     // so nothing observable may change on this path.
     if (opts.force !== true) {
-      const remainingViewers = this.viewers.countFor(instanceId);
+      const remainingViewers = await this.settledViewerCount(instanceId);
       if (remainingViewers > 0) {
         // No audit event: the only kind that fits is `instance.released`
         // (`extension-points.ts`'s `AuditEvent` union), and this instance

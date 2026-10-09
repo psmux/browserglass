@@ -215,7 +215,10 @@ describe('BrowserRouter.release, viewer aware', () => {
     // browser down under the tab still streaming.
     const clock = createFakeClock();
     const counts = new Map<string, number>();
-    const { router, nodes, store } = createTestRouter(clock, { viewers: viewerPort(counts) });
+    const { router, nodes, store } = createTestRouter(clock, {
+      viewers: viewerPort(counts),
+      config: { releaseViewerSettleMs: 0 },
+    });
     const { tenantId, appId } = seedBasics(store);
     const principal = principalFor(tenantId, appId, 'user-1');
 
@@ -248,7 +251,10 @@ describe('BrowserRouter.release, viewer aware', () => {
   it('terminates once the last viewer has gone', async () => {
     const clock = createFakeClock();
     const counts = new Map<string, number>();
-    const { router, nodes, store } = createTestRouter(clock, { viewers: viewerPort(counts) });
+    const { router, nodes, store } = createTestRouter(clock, {
+      viewers: viewerPort(counts),
+      config: { releaseViewerSettleMs: 0 },
+    });
     const { tenantId, appId } = seedBasics(store);
     const principal = principalFor(tenantId, appId, 'user-1');
 
@@ -272,7 +278,10 @@ describe('BrowserRouter.release, viewer aware', () => {
   it('force: true terminates regardless, the path the reaper and drainNode take', async () => {
     const clock = createFakeClock();
     const counts = new Map<string, number>();
-    const { router, nodes, store } = createTestRouter(clock, { viewers: viewerPort(counts) });
+    const { router, nodes, store } = createTestRouter(clock, {
+      viewers: viewerPort(counts),
+      config: { releaseViewerSettleMs: 0 },
+    });
     const { tenantId, appId } = seedBasics(store);
     const principal = principalFor(tenantId, appId, 'user-1');
 
@@ -306,5 +315,67 @@ describe('BrowserRouter.release, viewer aware', () => {
     );
     expect(outcome.outcome).toBe('terminated');
     expect(nodes.terminateCount).toBeGreaterThan(0);
+  });
+});
+
+describe('BrowserRouter.release, viewer settle window', () => {
+  function viewerPort(counts: Map<string, number>): { countFor: (id: InstanceId) => number } {
+    return { countFor: (id: InstanceId) => counts.get(id) ?? 0 };
+  }
+
+  /** Drives the fake clock in 50 ms steps until `p` settles, letting microtasks run between steps. */
+  async function runUntilSettled<T>(clock: ReturnType<typeof createFakeClock>, p: Promise<T>) {
+    let done = false;
+    p.then(
+      () => {
+        done = true;
+      },
+      () => {
+        done = true;
+      },
+    );
+    for (let i = 0; i < 200 && !done; i += 1) {
+      await new Promise((r) => setImmediate(r));
+      clock.advance(50);
+    }
+    return p;
+  }
+
+  it("terminates when the releasing caller's own socket drops out inside the window", async () => {
+    // The script shape: close the client, release at once. The count still
+    // shows the closing socket when the release lands and falls to zero a
+    // moment later.
+    const clock = createFakeClock();
+    const counts = new Map<string, number>();
+    const { router, nodes, store } = createTestRouter(clock, { viewers: viewerPort(counts) });
+    const { tenantId, appId } = seedBasics(store);
+    const principal = principalFor(tenantId, appId, 'user-1');
+
+    const handle = await router.acquire({}, principal);
+    const id = handle.result.instanceId;
+    counts.set(id, 1);
+    clock.setTimeout(() => counts.set(id, 0), 200);
+
+    const outcome = await runUntilSettled(clock, router.release(id, {}, principal));
+    expect(outcome.outcome).toBe('terminated');
+    expect(nodes.terminateCount).toBeGreaterThan(0);
+  });
+
+  it('still answers detached when somebody else stays attached past the window', async () => {
+    const clock = createFakeClock();
+    const counts = new Map<string, number>();
+    const { router, nodes, store } = createTestRouter(clock, { viewers: viewerPort(counts) });
+    const { tenantId, appId } = seedBasics(store);
+    const principal = principalFor(tenantId, appId, 'user-1');
+
+    const handle = await router.acquire({}, principal);
+    const id = handle.result.instanceId;
+    counts.set(id, 1);
+    const started = clock.now();
+
+    const outcome = await runUntilSettled(clock, router.release(id, {}, principal));
+    expect(outcome).toEqual({ instanceId: id, outcome: 'detached', remainingViewers: 1 });
+    expect(nodes.terminateCount).toBe(0);
+    expect(clock.now() - started).toBeGreaterThanOrEqual(1_500);
   });
 });
