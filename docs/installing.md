@@ -60,7 +60,7 @@ The rest are transitive or optional:
 * `@browserglass/cli` gives you the `bgls` binary: `bgls serve`, `bgls doctor`,
   `bgls inspect`, `bgls instances`, `bgls swarm run`, and `bgls mcp`.
 * `@browserglass/automation` is the automation client and a real MCP server: a
-  40-tool manifest covering driving, locators, a whole-page `bg_page_map`
+  41-tool manifest covering driving, locators, a whole-page `bg_page_map`
   inventory, diagnostics, and `bg_swarm_*` for parallel browsers. `bgls mcp`
   (from `@browserglass/cli`) is the launcher; see
   [`../docs/quickstart.md`](../docs/quickstart.md) for the JSON config an MCP

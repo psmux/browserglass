@@ -156,15 +156,15 @@ If you embed `@browserglass/server` yourself, the same thing is `new RemoteRunti
 
 ## 5. MCP: Claude driving it for you
 
-**What you get.** Claude reads the `pnpm bgls mcp` tool manifest and gets 40 tools covering the driving surface, the locator engine, a whole-page `bg_page_map` inventory, and swarm operations. You write a prompt, Claude drives a browser or a swarm of browsers, and you get the results back.
+**What you get.** Claude reads the `pnpm bgls mcp` tool manifest and gets 41 tools covering the driving surface, the locator engine, a whole-page `bg_page_map` inventory, and swarm operations. You write a prompt, Claude drives a browser or a swarm of browsers, and you get the results back.
 
 **What you give up.** Nothing about what BrowserGlass does. You give up code ownership: Claude is the driver, and you read logs to understand what it did.
 
 **The catch.** MCP is a one-way pipe: Claude calls tools, the tools return results, but the tools never loop back to Claude to ask "should I click the thing I just found". Your prompt has to be clear enough that Claude makes the right call on first sight. For the rare case where Claude needs more information before deciding (a verification screenshot, a second locator check), it can call tools to get it, but it is your job to ask for that in the prompt.
 
-**How it works.** Run `pnpm bgls mcp` in your terminal, connect it to Claude, and give Claude a task. The server exports these 40 tools:
+**How it works.** Run `pnpm bgls mcp` in your terminal, connect it to Claude, and give Claude a task. The server exports these 41 tools:
 
-**Driving and locomotion:** `bg_status`, `bg_navigate`, `bg_back`, `bg_forward`, `bg_reload`, `bg_stop`, `bg_click`, `bg_type`, `bg_press_key`, `bg_scroll`, `bg_control`, `bg_screenshot`, `bg_pdf`, `bg_recording`, `bg_set_input_files`, `bg_wait_for_navigation`, `bg_tabs`
+**Driving and locomotion:** `bg_status`, `bg_navigate`, `bg_back`, `bg_forward`, `bg_reload`, `bg_stop`, `bg_click`, `bg_type`, `bg_press_key`, `bg_scroll`, `bg_drag`, `bg_control`, `bg_screenshot`, `bg_pdf`, `bg_recording`, `bg_set_input_files`, `bg_wait_for_navigation`, `bg_tabs`
 
 **Locators and inspection:** `bg_resolve`, `bg_evaluate`, `bg_wait_for`, `bg_wait_for_text`, `bg_get_text`, `bg_get_attribute`, `bg_is_checked`, `bg_get_html`, `bg_scroll_into_view`, `bg_read_page`
 

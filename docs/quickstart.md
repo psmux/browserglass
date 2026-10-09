@@ -210,7 +210,7 @@ package.
 
 ### MCP
 
-`@browserglass/automation` ships a 40-tool MCP server
+`@browserglass/automation` ships a 41-tool MCP server
 (`createAutomationMcpServer()`), and `pnpm bgls mcp` is the launcher: it
 constructs that server, wires the SDK's own `StdioServerTransport`, and
 connects it, reusing the exact REST acquire-and-mint plumbing `swarm run`
@@ -253,10 +253,10 @@ demand, through the same acquire function. Output from an MCP client
 that connected to `pnpm bgls mcp`, listed tools, and called three of them:
 
 ```
-tool count: 40
+tool count: 41
 tool names: bg_status, bg_read_page, bg_click, bg_type, bg_control, bg_set_input_files,
 bg_navigate, bg_screenshot, bg_pdf, bg_recording, bg_back, bg_forward, bg_reload, bg_stop, bg_press_key,
-bg_scroll, bg_wait_for_navigation, bg_tabs, bg_evaluate, bg_resolve, bg_wait_for,
+bg_scroll, bg_drag, bg_wait_for_navigation, bg_tabs, bg_evaluate, bg_resolve, bg_wait_for,
 bg_wait_for_text, bg_get_text, bg_get_attribute, bg_is_checked, bg_get_html,
 bg_scroll_into_view, bg_fill, bg_select, bg_diagnostics_subscribe, bg_read_console,
 bg_read_network, bg_wait_for_network_idle, bg_page_map, bg_swarm_open, bg_swarm_list,

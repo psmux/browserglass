@@ -23,7 +23,7 @@ import math
 import time
 import uuid
 import weakref
-from typing import Any, Awaitable, Callable, List, Mapping, Optional, Sequence, Union
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Sequence, Union
 
 from .binary import (
     HEADER_BYTES,
@@ -88,6 +88,11 @@ def _pack_modifiers(mods: Optional[Sequence[str]]) -> int:
 
 def _hex_to_bytes(hex_str: str) -> bytes:
     return bytes.fromhex(hex_str)
+
+
+def _button_mask(button: str) -> int:
+    """DOM ``MouseEvent.buttons`` bit for a named button (left 1, right 2, middle 4)."""
+    return 1 if button == "left" else 2 if button == "right" else 4
 
 
 async def _sleep_ms(ms: float) -> None:
@@ -1134,21 +1139,144 @@ class AutomationClient:
         await self._core.send("input.mouse", {**base, "kind": "down", "x": x, "y": y, "button": btn, "buttons": 1, "modifiers": mods, "clickCount": count})
         await self._core.send("input.mouse", {**base, "kind": "up", "x": x, "y": y, "button": btn, "buttons": 0, "modifiers": mods})
 
-    async def move_to(self, x: float, y: float) -> None:
+    async def _dispatch_move_to(
+        self, name: str, target_id: str, x: float, y: float, *, buttons: int = 0, modifiers: Optional[Sequence[str]] = None
+    ) -> None:
+        """The raw pointer move, without the ``_run()`` pipeline. Same gate
+        order as :meth:`_dispatch_click_at`."""
+        gen = await self._core.ensure_gen(target_id)
+        self._core.assert_may_dispatch(target_id, name)
+        lease = self._core.leases.get(target_id)
+        if lease is None:
+            raise AutomationError("LEASE_NOT_HELD", f"{name}() requires a held ControlLease")
+        await self._core.send(
+            "input.mouse",
+            {"targetId": target_id, "fw": self._core.viewport["width"], "fh": self._core.viewport["height"], "gen": gen, "leaseId": lease.lease_id, "kind": "move", "x": x, "y": y, "button": "none", "buttons": buttons, "modifiers": _pack_modifiers(modifiers)},
+        )
+
+    async def _dispatch_mouse_button(
+        self, name: str, kind: str, target_id: str, x: float, y: float, *, button: Optional[str] = None, click_count: Optional[int] = None, modifiers: Optional[Sequence[str]] = None
+    ) -> None:
+        """One ``down`` or ``up``, without the ``_run()`` pipeline."""
+        gen = await self._core.ensure_gen(target_id)
+        self._core.assert_may_dispatch(target_id, name)
+        lease = self._core.leases.get(target_id)
+        if lease is None:
+            raise AutomationError("LEASE_NOT_HELD", f"{name}() requires a held ControlLease")
+        btn = button or "left"
+        msg: Dict[str, Any] = {
+            "targetId": target_id, "fw": self._core.viewport["width"], "fh": self._core.viewport["height"], "gen": gen, "leaseId": lease.lease_id,
+            "kind": kind, "x": x, "y": y, "button": btn, "buttons": _button_mask(btn) if kind == "down" else 0, "modifiers": _pack_modifiers(modifiers),
+        }
+        if kind == "down":
+            msg["clickCount"] = click_count or 1
+        await self._core.send("input.mouse", msg)
+
+    async def move_to(self, x: float, y: float, *, buttons: Optional[int] = None, modifiers: Optional[Sequence[str]] = None) -> None:
+        """Moves the pointer to a viewport CSS pixel. Between
+        :meth:`mouse_down` and :meth:`mouse_up` this is a drag: the gateway
+        tracks the buttons this viewer holds and reports the move with
+        them, whatever ``buttons`` says."""
         target_id = self._target_id
 
         async def fn() -> None:
-            gen = await self._core.ensure_gen(target_id)
-            self._core.assert_may_dispatch(target_id, "moveTo")
-            lease = self._core.leases.get(target_id)
-            if lease is None:
-                raise AutomationError("LEASE_NOT_HELD", "moveTo() requires a held ControlLease")
-            await self._core.send(
-                "input.mouse",
-                {"targetId": target_id, "fw": self._core.viewport["width"], "fh": self._core.viewport["height"], "gen": gen, "leaseId": lease.lease_id, "kind": "move", "x": x, "y": y, "button": "none", "buttons": 0, "modifiers": 0},
-            )
+            await self._dispatch_move_to("moveTo", target_id, x, y, buttons=buttons or 0, modifiers=modifiers)
 
-        await self._run("moveTo", target_id, ["control"], True, {"x": x, "y": y}, True, fn)
+        args: Dict[str, Any] = {"x": x, "y": y}
+        if buttons is not None:
+            args["buttons"] = buttons
+        await self._run("moveTo", target_id, ["control"], True, args, True, fn)
+
+    async def mouse_down(
+        self, x: float, y: float, *, button: Optional[str] = None, click_count: Optional[int] = None, modifiers: Optional[Sequence[str]] = None
+    ) -> None:
+        """Presses a mouse button at a viewport CSS pixel and leaves it
+        held. Pair with :meth:`move_to` and :meth:`mouse_up`, or use
+        :meth:`drag`. The gateway releases a button still held when the
+        lease ends."""
+        target_id = self._target_id
+
+        async def fn() -> None:
+            await self._dispatch_mouse_button("mouseDown", "down", target_id, x, y, button=button, click_count=click_count, modifiers=modifiers)
+
+        await self._run("mouseDown", target_id, ["control"], True, {"x": x, "y": y, "button": button or "left"}, True, fn)
+
+    async def mouse_up(self, x: float, y: float, *, button: Optional[str] = None, modifiers: Optional[Sequence[str]] = None) -> None:
+        """Releases a mouse button at a viewport CSS pixel."""
+        target_id = self._target_id
+
+        async def fn() -> None:
+            await self._dispatch_mouse_button("mouseUp", "up", target_id, x, y, button=button, modifiers=modifiers)
+
+        await self._run("mouseUp", target_id, ["control"], True, {"x": x, "y": y, "button": button or "left"}, True, fn)
+
+    async def drag(
+        self,
+        source: Union[str, Mapping[str, float]],
+        target: Union[str, Mapping[str, float]],
+        *,
+        steps: int = 10,
+        delay_ms: float = 16,
+        button: Optional[str] = None,
+        modifiers: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        """Presses at ``source``, moves to ``target`` in ``steps`` evenly
+        spaced moves with the button held, and releases at ``target``.
+        Each end is ``{"x": .., "y": ..}`` in viewport CSS pixels, or a
+        selector whose first match's centre is used. Returns
+        ``{"from": {...}, "to": {...}, "steps": n}``."""
+        target_id = self._target_id
+        caps = ["evaluate", "control"] if isinstance(source, str) or isinstance(target, str) else ["control"]
+        btn = button or "left"
+
+        async def fn() -> Dict[str, Any]:
+            start = await self._drag_point(target_id, source, True)
+            end = await self._drag_point(target_id, target, False)
+            n = max(1, int(steps))
+            held = _button_mask(btn)
+            await self._dispatch_move_to("drag", target_id, start["x"], start["y"], modifiers=modifiers)
+            await self._dispatch_mouse_button("drag", "down", target_id, start["x"], start["y"], button=btn, modifiers=modifiers)
+            released = False
+            try:
+                for i in range(1, n + 1):
+                    if delay_ms > 0:
+                        await _sleep_ms(delay_ms)
+                    t = i / n
+                    await self._dispatch_move_to(
+                        "drag", target_id, start["x"] + (end["x"] - start["x"]) * t, start["y"] + (end["y"] - start["y"]) * t, buttons=held, modifiers=modifiers
+                    )
+                if delay_ms > 0:
+                    await _sleep_ms(delay_ms)
+                await self._dispatch_mouse_button("drag", "up", target_id, end["x"], end["y"], button=btn, modifiers=modifiers)
+                released = True
+            finally:
+                # Best effort: do not leave the button held while the lease
+                # is still ours. Without the lease the gateway has already
+                # released it.
+                if not released and self._core.has_control(target_id):
+                    try:
+                        await self._dispatch_mouse_button("drag", "up", target_id, end["x"], end["y"], button=btn)
+                    except Exception:
+                        pass
+            return {"from": start, "to": end, "steps": n}
+
+        args = {
+            "from": source if isinstance(source, str) else dict(source),
+            "to": target if isinstance(target, str) else dict(target),
+            "steps": steps,
+        }
+        return await self._run("drag", target_id, caps, True, args, True, fn)
+
+    async def _drag_point(self, target_id: str, point: Union[str, Mapping[str, float]], scroll: bool) -> Dict[str, float]:
+        if not isinstance(point, str):
+            return {"x": float(point["x"]), "y": float(point["y"])}
+        res = await self._locators.resolve(target_id, point, {"limit": 1, "stamp": False, "stable": False, "scroll": scroll})
+        if not res.matches:
+            raise AutomationError("NOT_FOUND", f"drag() found nothing matching {point}", {"selector": point})
+        match = res.matches[0]
+        if not match.visible:
+            raise AutomationError("NOT_VISIBLE", f"drag() target {point} is not visible", {"selector": point})
+        return {"x": float(match.center["x"]), "y": float(match.center["y"])}
 
     async def type_text(self, text: str, *, modifiers: Optional[Sequence[str]] = None) -> None:
         """Types ``text`` as real per-character ``keydown``/``keyup``

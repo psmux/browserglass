@@ -12,7 +12,7 @@ import { AutomationError } from '../errors.js';
 import type { LocatorMatch, SelectOptionSpec } from '../locator/types.js';
 import { BrowserSwarm } from '../swarm.js';
 import type { SwarmAcquireContext, SwarmAcquireResult, SwarmMember } from '../swarm.js';
-import type { AutomationEvents, UploadFileInput } from '../types.js';
+import type { AutomationEvents, DragPoint, UploadFileInput } from '../types.js';
 import {
   type McpToolResult,
   formatPageMapCapture,
@@ -418,6 +418,47 @@ export const AUTOMATION_MCP_TOOLS: readonly Tool[] = Object.freeze([
         },
         dx: { type: 'number', description: 'Horizontal scroll delta. Default 0.' },
         dy: { type: 'number', description: 'Vertical scroll delta. Default 0.' },
+      },
+    },
+  },
+  {
+    name: 'bg_drag',
+    description:
+      'Presses the mouse at one point, moves to another with the button held, and releases there: drawing on a canvas, moving a slider, dragging a card between columns. Each end is either a viewport CSS coordinate (fromX/fromY, toX/toY) or a selector (fromSelector, toSelector) whose first match centre is used. Requires a held control lease: call bg_control with action "acquire" first. A selector end additionally requires the evaluate capability.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ...targetSelectorProperties(),
+        fromX: {
+          type: 'number',
+          description: 'Viewport CSS x to press at. Give fromX/fromY or fromSelector.',
+        },
+        fromY: { type: 'number', description: 'Viewport CSS y to press at.' },
+        fromSelector: {
+          type: 'string',
+          description:
+            'Selector to press on, the same dialect bg_resolve accepts. Requires the evaluate capability.',
+        },
+        toX: {
+          type: 'number',
+          description: 'Viewport CSS x to release at. Give toX/toY or toSelector.',
+        },
+        toY: { type: 'number', description: 'Viewport CSS y to release at.' },
+        toSelector: {
+          type: 'string',
+          description: 'Selector to release on. Requires the evaluate capability.',
+        },
+        steps: {
+          type: 'number',
+          description: 'Interpolated moves between press and release. Default 10.',
+        },
+        delayMs: { type: 'number', description: 'Pause between moves in ms. Default 16.' },
+        button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Default left.' },
+        modifiers: {
+          type: 'array',
+          items: { type: 'string', enum: ['Alt', 'Control', 'Meta', 'Shift'] },
+          description: 'Modifier keys held for the whole drag. Default none.',
+        },
       },
     },
   },
@@ -1817,6 +1858,52 @@ async function callScroll(
   }
 }
 
+/** `bg_drag`. */
+async function callDrag(
+  state: McpServerState,
+  args: Record<string, unknown>,
+): Promise<McpToolResult> {
+  const startedAt = Date.now();
+  try {
+    const { client } = resolveTarget(state, args);
+    const end = (side: 'from' | 'to'): DragPoint => {
+      const sel = args[`${side}Selector`];
+      if (typeof sel === 'string') return sel;
+      const x = args[`${side}X`];
+      const y = args[`${side}Y`];
+      if (typeof x === 'number' && typeof y === 'number') return { x, y };
+      throw new Error(`bg_drag needs ${side}X and ${side}Y, or ${side}Selector`);
+    };
+    const from = end('from');
+    const to = end('to');
+    const steps = args['steps'];
+    const delayMs = args['delayMs'];
+    const button = args['button'];
+    const modifiersArg = args['modifiers'];
+    const result = await client.drag(from, to, {
+      ...(typeof steps === 'number' ? { steps } : {}),
+      ...(typeof delayMs === 'number' ? { delayMs } : {}),
+      ...(typeof button === 'string' ? { button: button as 'left' | 'right' | 'middle' } : {}),
+      ...(Array.isArray(modifiersArg)
+        ? { modifiers: modifiersArg as Array<'Alt' | 'Control' | 'Meta' | 'Shift'> }
+        : {}),
+    });
+    return formatToolResult(
+      `Dragged from (${Math.round(result.from.x)}, ${Math.round(result.from.y)}) to (${Math.round(result.to.x)}, ${Math.round(result.to.y)}) in ${result.steps} moves.`,
+      {
+        ok: true,
+        action: 'bg_drag',
+        durationMs: Date.now() - startedAt,
+        from: result.from,
+        to: result.to,
+        steps: result.steps,
+      },
+    );
+  } catch (err) {
+    return formatToolError('bg_drag', startedAt, err);
+  }
+}
+
 /** `bg_wait_for_navigation`. */
 async function callWaitForNavigation(
   state: McpServerState,
@@ -2900,6 +2987,8 @@ export async function callAutomationTool(
       return callPressKey(state, args);
     case 'bg_scroll':
       return callScroll(state, args);
+    case 'bg_drag':
+      return callDrag(state, args);
     case 'bg_wait_for_navigation':
       return callWaitForNavigation(state, args);
     case 'bg_tabs':

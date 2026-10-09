@@ -73,11 +73,16 @@ import type {
   DiagnosticsFeeds,
   DiagnosticsSubscription,
   DownloadResult,
+  DragOptions,
+  DragPoint,
+  DragResult,
   EvaluateOptions,
   HumanTypeOptions,
   InspectAtOptions,
   InspectResult,
   ListRecordingsOptions,
+  MouseButtonOptions,
+  MoveToOptions,
   NavigateOptions,
   OpenTabOptions,
   PageMapEpoch,
@@ -121,6 +126,11 @@ function packModifiers(mods?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'>): numb
   if (mods.includes('Meta')) m |= 0x4;
   if (mods.includes('Shift')) m |= 0x8;
   return m;
+}
+
+/** DOM `MouseEvent.buttons` bit for a named button (left 1, right 2, middle 4). */
+function buttonMask(button: 'left' | 'right' | 'middle'): number {
+  return button === 'left' ? 1 : button === 'right' ? 2 : 4;
 }
 
 /** Decodes a lowercase hex string to bytes. Hand rolled rather than `Buffer.from(hex, 'hex')` because this package runs in a browser as well as in Node, and `Buffer` is not there. */
@@ -1771,6 +1781,7 @@ export class AutomationClient {
     targetId: string,
     x: number,
     y: number,
+    opts?: MoveToOptions,
   ): Promise<void> {
     const gen = await this.core.ensureGen(targetId);
     // The second, load-bearing half of the dispatch gate (see `run()`):
@@ -1793,16 +1804,189 @@ export class AutomationClient {
       x,
       y,
       button: 'none',
-      buttons: 0,
-      modifiers: 0,
+      buttons: opts?.buttons ?? 0,
+      modifiers: packModifiers(opts?.modifiers),
     });
   }
 
-  async moveTo(x: number, y: number): Promise<void> {
+  /**
+   * Moves the pointer to a viewport CSS pixel. Between {@link mouseDown}
+   * and {@link mouseUp} this is a drag: the gateway tracks which buttons
+   * this viewer holds and reports the move with them, whatever
+   * `opts.buttons` says.
+   */
+  async moveTo(x: number, y: number, opts?: MoveToOptions): Promise<void> {
     const targetId = this._targetId;
-    return this.run('moveTo', targetId, ['control'], true, { x, y }, true, async () =>
-      this.dispatchMoveTo('moveTo', targetId, x, y),
+    return this.run(
+      'moveTo',
+      targetId,
+      ['control'],
+      true,
+      { x, y, ...(opts?.buttons !== undefined ? { buttons: opts.buttons } : {}) },
+      true,
+      async () => this.dispatchMoveTo('moveTo', targetId, x, y, opts),
     );
+  }
+
+  /**
+   * Presses a mouse button at a viewport CSS pixel and leaves it held.
+   * Pair it with {@link moveTo} and {@link mouseUp} for a hand built
+   * drag, or use {@link drag}. A button still held when the lease ends is
+   * released by the gateway, so a crashed script cannot leave a page
+   * stuck mid drag.
+   */
+  async mouseDown(x: number, y: number, opts?: MouseButtonOptions): Promise<void> {
+    const targetId = this._targetId;
+    return this.run('mouseDown', targetId, ['control'], true, { x, y, ...opts }, true, async () =>
+      this.dispatchMouseButton('mouseDown', 'down', targetId, x, y, opts),
+    );
+  }
+
+  /** Releases a mouse button at a viewport CSS pixel. See {@link mouseDown}. */
+  async mouseUp(x: number, y: number, opts?: MouseButtonOptions): Promise<void> {
+    const targetId = this._targetId;
+    return this.run('mouseUp', targetId, ['control'], true, { x, y, ...opts }, true, async () =>
+      this.dispatchMouseButton('mouseUp', 'up', targetId, x, y, opts),
+    );
+  }
+
+  /**
+   * Presses at `from`, moves to `to` in `steps` evenly spaced moves with
+   * the button held, and releases at `to`. Either end may be a selector,
+   * in which case the centre of its first match is used (`from` is
+   * scrolled into view first; `to` is measured where it is, since
+   * scrolling in the middle of a drag would move the target under the
+   * pointer).
+   *
+   * Costs one step, like every other verb, and checks for a takeover
+   * before every move: a person taking the browser stops the drag where
+   * it is, and the gateway releases the held button along with the lease.
+   */
+  async drag(from: DragPoint, to: DragPoint, opts?: DragOptions): Promise<DragResult> {
+    const targetId = this._targetId;
+    const caps: Capability[] =
+      typeof from === 'string' || typeof to === 'string' ? ['evaluate', 'control'] : ['control'];
+    return this.run(
+      'drag',
+      targetId,
+      caps,
+      true,
+      {
+        from: typeof from === 'string' ? from : { ...from },
+        to: typeof to === 'string' ? to : { ...to },
+        ...(opts?.steps !== undefined ? { steps: opts.steps } : {}),
+      },
+      true,
+      async () => {
+        const start = await this.dragPoint(targetId, from, true);
+        const end = await this.dragPoint(targetId, to, false);
+        const steps = Math.max(1, Math.floor(opts?.steps ?? 10));
+        const delayMs = Math.max(0, opts?.delayMs ?? 16);
+        const button = opts?.button ?? 'left';
+        const held = buttonMask(button);
+        const mods = opts?.modifiers !== undefined ? { modifiers: opts.modifiers } : {};
+        await this.dispatchMoveTo('drag', targetId, start.x, start.y, mods);
+        await this.dispatchMouseButton('drag', 'down', targetId, start.x, start.y, {
+          button,
+          ...mods,
+        });
+        let released = false;
+        try {
+          for (let i = 1; i <= steps; i++) {
+            if (delayMs > 0) await sleepMs(delayMs);
+            const t = i / steps;
+            await this.dispatchMoveTo(
+              'drag',
+              targetId,
+              start.x + (end.x - start.x) * t,
+              start.y + (end.y - start.y) * t,
+              { buttons: held, ...mods },
+            );
+          }
+          if (delayMs > 0) await sleepMs(delayMs);
+          await this.dispatchMouseButton('drag', 'up', targetId, end.x, end.y, {
+            button,
+            ...mods,
+          });
+          released = true;
+        } finally {
+          // Best effort: a drag that failed part way through should not
+          // leave the button held while the lease is still ours. When the
+          // lease is gone the gateway has already released the button, and
+          // the dispatch below throws, which is ignored.
+          if (!released && this.core.hasControl(targetId)) {
+            try {
+              await this.dispatchMouseButton('drag', 'up', targetId, end.x, end.y, { button });
+            } catch {
+              // ignored, see above
+            }
+          }
+        }
+        return { from: start, to: end, steps };
+      },
+    );
+  }
+
+  /** Resolves one end of a {@link drag} to a viewport CSS pixel. */
+  private async dragPoint(
+    targetId: string,
+    point: DragPoint,
+    scroll: boolean,
+  ): Promise<{ x: number; y: number }> {
+    if (typeof point !== 'string') return { x: point.x, y: point.y };
+    const res = await this.locators.resolve(targetId, point, {
+      limit: 1,
+      stamp: false,
+      stable: false,
+      scroll,
+    });
+    const match = res.matches[0];
+    if (!match) {
+      throw new AutomationError('NOT_FOUND', `drag() found nothing matching ${point}`, {
+        selector: point,
+      });
+    }
+    if (!match.visible) {
+      throw new AutomationError('NOT_VISIBLE', `drag() target ${point} is not visible`, {
+        selector: point,
+      });
+    }
+    return { x: match.center.x, y: match.center.y };
+  }
+
+  /**
+   * One `down` or `up`, without the `run()` pipeline. Same gate order as
+   * {@link dispatchClickAt}: generation first, then the stand-down check,
+   * then the lease lookup.
+   */
+  private async dispatchMouseButton(
+    name: string,
+    kind: 'down' | 'up',
+    targetId: string,
+    x: number,
+    y: number,
+    opts?: MouseButtonOptions,
+  ): Promise<void> {
+    const gen = await this.core.ensureGen(targetId);
+    this.core.assertMayDispatch(targetId, name);
+    const lease = this.core.leases.get(targetId);
+    if (!lease)
+      throw new AutomationError('LEASE_NOT_HELD', `${name}() requires a held ControlLease`);
+    const button = opts?.button ?? 'left';
+    this.core.send('input.mouse', {
+      targetId,
+      fw: this.core.viewport.width,
+      fh: this.core.viewport.height,
+      gen,
+      leaseId: lease.leaseId,
+      kind,
+      x,
+      y,
+      button,
+      buttons: kind === 'down' ? buttonMask(button) : 0,
+      modifiers: packModifiers(opts?.modifiers),
+      ...(kind === 'down' ? { clickCount: opts?.clickCount ?? 1 } : {}),
+    });
   }
 
   /** Types `text` as real per-character `keydown`/`keyup` pairs (falling back to `input.text` for a character with no known DOM code). No inter-key delay; for anti-bot-style paced typing use {@link humanType}. */

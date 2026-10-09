@@ -253,6 +253,7 @@ options.
   `client.gate.resolve(gate_id, verdict)`, `client.gate.on_paused(handler)`.
   See "The outbound request gate" below.
 * **Coordinate-level interaction**: `client.click_at()`, `client.move_to()`,
+  `client.mouse_down()`, `client.mouse_up()`, `client.drag(source, target, steps=)`,
   `client.type_text()`, `client.insert_text()`, `client.press_key()`,
   `client.scroll()`, `client.human_type()`.
 * **The accessibility tree**: `client.a11y(role=, name=, max_nodes=, timeout_ms=)`
