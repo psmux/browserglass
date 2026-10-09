@@ -1,0 +1,21 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/protocol" },
+    { "path": "packages/store-sqlite" },
+    { "path": "packages/store-postgres" },
+    { "path": "packages/core" },
+    { "path": "packages/client" },
+    { "path": "packages/router" },
+    { "path": "packages/runtime-host" },
+    { "path": "packages/runtime-remote" },
+    { "path": "packages/runtime-docker" },
+    { "path": "packages/runtime-k8s" },
+    { "path": "packages/react" },
+    { "path": "packages/embed" },
+    { "path": "packages/automation" },
+    { "path": "packages/server" },
+    { "path": "packages/conformance" },
+    { "path": "packages/cli" }
+  ]
+}

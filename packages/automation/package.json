@@ -1,0 +1,71 @@
+{
+  "name": "@browserglass/automation",
+  "version": "0.1.0-alpha.0",
+  "description": "An automation client over the bgls.v1 socket, and a thin MCP server stub.",
+  "keywords": [
+    "browserglass",
+    "browser",
+    "chrome",
+    "cdp",
+    "remote-browser",
+    "automation",
+    "mcp",
+    "agent"
+  ],
+  "homepage": "https://github.com/psmux/browserglass/tree/main/packages/automation#readme",
+  "bugs": {
+    "url": "https://github.com/psmux/browserglass/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/psmux/browserglass.git",
+    "directory": "packages/automation"
+  },
+  "license": "Apache-2.0",
+  "author": "Godwin Josh",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "browserglass": {
+    "layer": null
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "node ../../scripts/guard-publisher.mjs"
+  },
+  "dependencies": {
+    "@browserglass/protocol": "workspace:^",
+    "@browserglass/client": "workspace:^",
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "jsdom": "^25.0.1"
+  }
+}

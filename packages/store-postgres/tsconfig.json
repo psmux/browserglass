@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist-tsc",
+    "rootDir": "src",
+    "tsBuildInfoFile": "./dist-tsc/.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../protocol"
+    }
+  ]
+}

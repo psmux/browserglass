@@ -1,0 +1,44 @@
+-- 0005_browser_spec_client_hints.sql
+--
+-- Adds `browser_specs.client_hints`, the durable home for
+-- `BrowserSpec.clientHints` (`packages/protocol/src/domain/entities.ts:339`,
+-- "Derived from `userAgent` when null"). Direct sibling of
+-- `0002_browser_spec_isolation.sql`: another `BrowserSpec` field that was
+-- always accepted, validated, and content addressed into a spec digest, but
+-- had no column to land in.
+--
+-- Before this migration the round trip was structurally impossible, not
+-- merely unimplemented: `StoredBrowserSpec`
+-- (`packages/protocol/src/domain/store-types.ts`) carried no `clientHints`
+-- field at all, so `mappers.ts`'s `storedSpecToBrowserSpec` had nothing to
+-- read and hardcoded `clientHints: null` on every expansion, regardless of
+-- what a caller had set on `acquire`. See
+-- `docs/cdp-and-interception.md` section 4, "The client hints half, which
+-- the flag alone does not cover": `--user-agent` (set at launch by
+-- `runtime-host/src/flags.ts`) changes the `User-Agent` header and
+-- `navigator.userAgent`, but Chrome has no launch flag for `Sec-CH-UA` /
+-- `navigator.userAgentData`; the only lever is
+-- `Emulation.setUserAgentOverride`'s `userAgentMetadata`, and that needs
+-- somewhere to read the value back from after a gateway restart or a warm
+-- pool reuse.
+--
+-- JSON `TEXT`, nullable, no default: same shape as the existing `proxy`
+-- column two rows above it in `0001_initial.sql`, which is also an
+-- optional structured object with no scalar representation. NULL means
+-- "no client hints recorded for this spec", which is both the correct
+-- meaning for a caller who never set `clientHints` and the only meaning a
+-- row written before this migration can have, since nothing about a
+-- pre-existing spec's client hints was ever recorded anywhere to backfill
+-- from. `storedSpecToBrowserSpec` reads a NULL column the same way it reads
+-- an absent one: `BrowserSpec.clientHints` comes back `null`, which is the
+-- same value it always returned before this migration existed, so an old
+-- row's meaning does not change.
+--
+-- Deliberately NOT NULL-free rather than `NOT NULL DEFAULT 'null'`: unlike
+-- `isolation` (`0002_browser_spec_isolation.sql`), which has exactly one
+-- pre-migration behaviour to encode as a default, "no client hints" is
+-- already representable as SQL NULL, and `parseJsonColumn` already treats a
+-- NULL column as its `fallback` argument. Forcing a NOT NULL JSON `'null'`
+-- literal here would only add a CHECK constraint and a second way to spell
+-- the same value for no benefit.
+ALTER TABLE browser_specs ADD COLUMN client_hints TEXT;

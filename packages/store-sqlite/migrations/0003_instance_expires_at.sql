@@ -1,0 +1,19 @@
+-- 0003_instance_expires_at.sql
+--
+-- Adds `instances.expires_at`, the durable home for `Instance.expiresAt`
+-- (the TTL deadline the reaper's `isTtlExpired` sweep, `router/src/router/lifecycle.ts`,
+-- actually enforces). `BrowserRouter.placeAndLaunch` (`router/src/router/BrowserRouter.ts`)
+-- already computes it from the caller's `ttlMs` and passes it in the
+-- `transitionInstance` patch that lands a new instance on `'live'`, but
+-- until this migration there was no column for it: the patch field was
+-- silently dropped, and `mappers.ts`'s `rowToInstance` hardcoded
+-- `acquiredAt + 14_400_000` (the default `maxDurationMs`, not the actual
+-- TTL) for every instance regardless of what `ttlMs` the caller asked for.
+--
+-- Nullable, no default: an instance still in `launching`/`warm` has not
+-- reached the `transitionInstance(..., 'live', {expiresAt})` call that
+-- sets this yet, and `rowToInstance` falls back to the same
+-- `acquiredAt + 14_400_000` default it always used when this column reads
+-- NULL, so a row written before this migration (or not yet live) keeps
+-- meaning exactly what it always meant.
+ALTER TABLE instances ADD COLUMN expires_at TEXT;

@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+# A test fixture that is a hand written dist file, not build output.
+!packages/cli/test/plugins/fixtures/npm-plugin/dist/
+dist-tsc/
+build/
+out/
+.next/
+*.tsbuildinfo
+
+# Turborepo
+.turbo/
+
+# Test coverage and tool caches
+coverage/
+.vitest/
+.vite/
+.cache/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Runtime databases and local data
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+bgls-data/
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Local agent and tool state
+.omc/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+
+# Python client: virtualenv, bytecode, and packaging/test caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Packed npm tarballs produced by `pnpm pack`
+*.tgz

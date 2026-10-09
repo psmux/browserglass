@@ -1,0 +1,65 @@
+{
+  "name": "@browserglass/runtime-k8s",
+  "version": "0.1.0-alpha.0",
+  "description": "Chrome on Kubernetes. Interface stub, not implemented yet.",
+  "keywords": [
+    "browserglass",
+    "browser",
+    "chrome",
+    "cdp",
+    "remote-browser",
+    "runtime",
+    "kubernetes"
+  ],
+  "homepage": "https://github.com/psmux/browserglass/tree/main/packages/runtime-k8s#readme",
+  "bugs": {
+    "url": "https://github.com/psmux/browserglass/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/psmux/browserglass.git",
+    "directory": "packages/runtime-k8s"
+  },
+  "license": "Apache-2.0",
+  "author": "Godwin Josh",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "browserglass": {
+    "layer": 3
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "node ../../scripts/guard-publisher.mjs"
+  },
+  "dependencies": {
+    "@browserglass/protocol": "workspace:^",
+    "@browserglass/core": "workspace:^"
+  }
+}

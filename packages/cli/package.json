@@ -1,0 +1,81 @@
+{
+  "name": "@browserglass/cli",
+  "version": "0.1.0-alpha.0",
+  "description": "bgls: serve, inspect, doctor, and the instances/swarm browser-driving commands implemented; every other command registered with a clear not-implemented message.",
+  "keywords": ["browserglass", "browser", "chrome", "cdp", "remote-browser", "cli", "devtools"],
+  "homepage": "https://github.com/psmux/browserglass/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/psmux/browserglass/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/psmux/browserglass.git",
+    "directory": "packages/cli"
+  },
+  "license": "Apache-2.0",
+  "author": "Godwin Josh",
+  "type": "module",
+  "sideEffects": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "bgls": "./dist/bin.mjs"
+  },
+  "typesVersions": {
+    "*": {
+      "config": ["./dist/config.d.ts"]
+    }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./config": {
+      "types": "./dist/config.d.ts",
+      "default": "./dist/config.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "browserglass": {
+    "layer": null
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "node ../../scripts/guard-publisher.mjs"
+  },
+  "dependencies": {
+    "@browserglass/protocol": "workspace:^",
+    "@browserglass/plugin-api": "workspace:^",
+    "@browserglass/core": "workspace:^",
+    "@browserglass/router": "workspace:^",
+    "@browserglass/server": "workspace:^",
+    "@browserglass/client": "workspace:^",
+    "@browserglass/react": "workspace:^",
+    "@browserglass/automation": "workspace:^",
+    "@browserglass/runtime-host": "workspace:^",
+    "@browserglass/runtime-remote": "workspace:^",
+    "@browserglass/runtime-docker": "workspace:^",
+    "@browserglass/runtime-k8s": "workspace:^",
+    "@browserglass/store-sqlite": "workspace:^",
+    "@browserglass/store-postgres": "workspace:^",
+    "citty": "^0.1.6",
+    "consola": "^3.4.0",
+    "c12": "^2.0.1",
+    "tinyexec": "^0.3.2",
+    "@modelcontextprotocol/sdk": "^1.30.0"
+  },
+  "devDependencies": {
+    "better-sqlite3": "^11.8.1"
+  }
+}

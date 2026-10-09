@@ -1,0 +1,3281 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "BrowserGlass Gateway REST API",
+    "version": "0.1.0-alpha.0",
+    "description": "The REST surface of a BrowserGlass gateway (@browserglass/server), hand-written alongside packages/server/src/rest/router.ts's route table so the two do not drift silently (see packages/server/test/rest/openapi-drift.test.ts). HTTP is request/response: a caller wanting a live feed (frames, console, network) still needs the WebSocket transport (bgls.v1) or a poll loop against these routes, never a push from here. Routes tagged 'stub' are registered but answer 501 Not Implemented; every other route is live."
+  },
+  "servers": [
+    {
+      "url": "/browserglass",
+      "description": "Default mount point; see createBrowserGlass()'s mountPath option."
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "paths": {
+    "/v1/instances": {
+      "post": {
+        "summary": "Acquire (launch or reuse) a browser instance",
+        "tags": ["instances"],
+        "x-capability": "instance.create",
+        "parameters": [],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "AcquireRequest: spec, sticky affinity, subject, metadata, etc."
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Instance acquired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Queued, not yet placed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "get": {
+        "summary": "List instances (cursor paginated)",
+        "tags": ["instances"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "poolId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of instances",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/inventory": {
+      "get": {
+        "summary": "The open instances a caller may see, with live titles/URLs and a count",
+        "description": "The confirm-before-destroy surface: enough identity (createdBy, metadata, lifetime, live target titles/URLs) to tell two same-spec browsers apart before ending one, plus totalCount so \"how many are open\" needs no client-side arithmetic across pages. Every InstanceLifecycleState except released/failed is 'open'; state, when given, must be one of the open ones (released/failed are refused with a pointer to GET /v1/instances/{instanceId}/history instead). targetsLive/targetsObservedAt make staleness explicit: targets are read from a live ManagedSession already attached in this gateway process (free, no new CDP connection triggered), never guessed or fetched by attaching on demand. See packages/server/src/rest/routes/inventory.ts's own module doc for the live-versus-cached argument and the redaction/cross-node-honesty precedent this follows.",
+        "tags": ["instances"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 100
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "description": "One open InstanceLifecycleState (not released/failed).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "poolId",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of open instances, plus the unpaged total",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "instanceId": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string"
+                          },
+                          "nodeId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "createdBy": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "acquiredAt": {
+                            "type": "number"
+                          },
+                          "readyAt": {
+                            "type": "number",
+                            "nullable": true
+                          },
+                          "lastActivityAt": {
+                            "type": "number"
+                          },
+                          "expiresAt": {
+                            "type": "number"
+                          },
+                          "metadata": {
+                            "type": "object"
+                          },
+                          "lifetime": {
+                            "type": "string",
+                            "enum": ["viewer-bound", "explicit"]
+                          },
+                          "targets": {
+                            "type": "array",
+                            "items": {
+                              "type": "object"
+                            }
+                          },
+                          "targetsLive": {
+                            "type": "boolean"
+                          },
+                          "targetsObservedAt": {
+                            "type": "number",
+                            "nullable": true
+                          }
+                        }
+                      }
+                    },
+                    "totalCount": {
+                      "type": "integer"
+                    },
+                    "nextCursor": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "hasMore": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}": {
+      "get": {
+        "summary": "Describe one instance",
+        "tags": ["instances"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The instance view",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Release an instance",
+        "tags": ["instances"],
+        "x-capability": "instance.destroy",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "profile",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["keep", "discard", "snapshot"]
+            }
+          },
+          {
+            "name": "force",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "released": {
+                      "type": "boolean"
+                    },
+                    "outcome": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/attach": {
+      "post": {
+        "summary": "Attach to (or re-affirm) an instance as a viewer",
+        "tags": ["instances"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Attach result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/history": {
+      "get": {
+        "summary": "What happened to this browser, readable after it is gone",
+        "description": "Reads the instances store row directly (not through BrowserRouter.describe(), which answers E_INSTANCE_GONE for exactly the released row this route exists to still answer for), and folds in whatever audit_events rows exist for this instanceId (Store.queryAudit; empty until a concurrent change makes audit writing real, at which point this route's auditEvents starts carrying rows with no further change here). firstViewerAt/releaseReason/restartCount/peakRssMib/osPid are named in historyFieldsUnavailable and reported null: those five live only on the raw instances table row and are not yet carried onto the Instance domain entity Store.getInstance returns; closing that gap needs a new Store method, out of this route's ownership. When the instances row itself has left its retention window but audit rows for it survive (audit_events carries no foreign key to instances by design), instanceRecordFound is false and the response is built from the audit trail alone rather than 404ing outright. See packages/server/src/rest/routes/inventory.ts's own module doc.",
+        "tags": ["instances"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "This instance's lifecycle history, and its audit trail if any",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "instanceId": {
+                      "type": "string"
+                    },
+                    "instanceRecordFound": {
+                      "type": "boolean"
+                    },
+                    "status": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "nodeId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "createdBy": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "createdAt": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "launchedAt": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "firstViewerAt": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "lastActiveAt": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "releasedAt": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "releaseReason": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "statusSince": {
+                      "type": "number",
+                      "nullable": true
+                    },
+                    "restartCount": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "peakRssMib": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "osPid": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "nullable": true
+                    },
+                    "lifetime": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": ["viewer-bound", "explicit", null]
+                    },
+                    "historyFieldsUnavailable": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "auditEvents": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}": {
+      "get": {
+        "summary": "Get one session row",
+        "tags": ["sessions"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The session row",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}/viewers": {
+      "get": {
+        "summary": "List viewers currently attached to a session",
+        "tags": ["sessions"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Viewer rows",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/tokens": {
+      "post": {
+        "summary": "Issue a scoped access token",
+        "tags": ["auth"],
+        "x-capability": "admin",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sub", "scope"],
+                "properties": {
+                  "sub": {
+                    "type": "string"
+                  },
+                  "caps": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "scope": {
+                    "type": "object"
+                  },
+                  "ttlSeconds": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Issued token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/targets": {
+      "get": {
+        "summary": "List targets (tabs) open in an instance",
+        "description": "A poll, not a feed: use the WebSocket transport's target.list/target.updated for live updates.",
+        "tags": ["targets"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Target list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "targetId": {
+                            "type": "string"
+                          },
+                          "kind": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "url": {
+                            "type": "string"
+                          },
+                          "faviconUrl": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "index": {
+                            "type": "integer"
+                          },
+                          "windowId": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "active": {
+                            "type": "boolean"
+                          },
+                          "audible": {
+                            "type": "boolean"
+                          },
+                          "muted": {
+                            "type": "boolean"
+                          },
+                          "loading": {
+                            "type": "boolean"
+                          },
+                          "canGoBack": {
+                            "type": "boolean"
+                          },
+                          "canGoForward": {
+                            "type": "boolean"
+                          },
+                          "openerTargetId": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "viewers": {
+                            "type": "integer"
+                          },
+                          "createdAt": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "summary": "Open a new target (tab)",
+        "tags": ["targets"],
+        "x-capability": "tabs.manage",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "targetId": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "faviconUrl": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "index": {
+                      "type": "integer"
+                    },
+                    "windowId": {
+                      "type": "integer",
+                      "nullable": true
+                    },
+                    "active": {
+                      "type": "boolean"
+                    },
+                    "audible": {
+                      "type": "boolean"
+                    },
+                    "muted": {
+                      "type": "boolean"
+                    },
+                    "loading": {
+                      "type": "boolean"
+                    },
+                    "canGoBack": {
+                      "type": "boolean"
+                    },
+                    "canGoForward": {
+                      "type": "boolean"
+                    },
+                    "openerTargetId": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "viewers": {
+                      "type": "integer"
+                    },
+                    "createdAt": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/targets/{targetId}": {
+      "delete": {
+        "summary": "Close a target (tab)",
+        "tags": ["targets"],
+        "x-capability": "tabs.manage",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "closed": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/targets/{targetId}/navigate": {
+      "post": {
+        "summary": "Navigate a target: goto, back, forward, reload, or stop",
+        "description": "Answers once the navigation command is acknowledged, not once the page finishes loading; poll GET .../targets or use the WebSocket transport's nav.state for load completion.",
+        "tags": ["targets"],
+        "x-capability": "navigate",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": ["goto", "back", "forward", "reload", "stop"],
+                    "default": "goto"
+                  },
+                  "url": {
+                    "type": "string",
+                    "description": "Required when kind is \"goto\"."
+                  },
+                  "ignoreCache": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Navigation state, or {navigated:true} when the driver has none to report",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "loading": {
+                      "type": "boolean"
+                    },
+                    "navigated": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/targets/{targetId}/screenshot": {
+      "get": {
+        "summary": "Capture one screenshot of a target",
+        "description": "One image, not a stream: for a live feed, subscribe to the target's stream over the WebSocket transport instead.",
+        "tags": ["targets"],
+        "x-capability": "capture",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["png", "jpeg"],
+              "default": "png"
+            }
+          },
+          {
+            "name": "quality",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            },
+            "description": "jpeg only"
+          },
+          {
+            "name": "fullPage",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The screenshot, base64 encoded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "format": {
+                      "type": "string",
+                      "enum": ["png", "jpeg"]
+                    },
+                    "data": {
+                      "type": "string",
+                      "format": "byte"
+                    },
+                    "width": {
+                      "type": "integer"
+                    },
+                    "height": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/targets/{targetId}/input": {
+      "post": {
+        "summary": "Dispatch a click or a type into a target",
+        "description": "Requires the caller to hold (borrows and releases per call) the target's control lease, the same as a WebSocket caller.",
+        "tags": ["targets"],
+        "x-capability": "control",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["action", "x", "y"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["click"]
+                      },
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "button": {
+                        "type": "string",
+                        "enum": ["left", "middle", "right"]
+                      }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": ["action", "text"],
+                    "properties": {
+                      "action": {
+                        "type": "string",
+                        "enum": ["type"]
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dispatched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "dispatched": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/targets/{targetId}/cdp": {
+      "post": {
+        "summary": "Raw CDP passthrough, one allowlisted method at a time",
+        "description": "Off by default, granted by no role bundle: a token must name the cdp capability explicitly. The method must be on cdp-passthrough-allowlist.ts's allowlist, checked before a live sender is even looked for, so a disallowed method is refused the same way whether or not this build has one wired.",
+        "tags": ["targets"],
+        "x-capability": "cdp",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["method"],
+                "properties": {
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The raw CDP reply",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {}
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/upload/init": {
+      "post": {
+        "summary": "Begin staging a file upload",
+        "tags": ["uploads"],
+        "x-capability": "upload",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "sizeBytes"],
+                "properties": {
+                  "uploadId": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "sizeBytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "mime": {
+                    "type": "string"
+                  },
+                  "instanceId": {
+                    "type": "string",
+                    "nullable": true
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Staging begun",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uploadId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "chunkBytes": {
+                      "type": "integer"
+                    },
+                    "maxInFlight": {
+                      "type": "integer"
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/upload/{uploadId}": {
+      "put": {
+        "summary": "Append a chunk of raw bytes to a staged upload",
+        "description": "Body is raw bytes, not JSON, appended at the current offset. Resume by re-reading GET /v1/upload/:uploadId for the received offset.",
+        "tags": ["uploads"],
+        "x-capability": "upload",
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "format": "binary"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chunk accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uploadId": {
+                      "type": "string"
+                    },
+                    "receivedBytes": {
+                      "type": "integer"
+                    },
+                    "declaredBytes": {
+                      "type": "integer"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "get": {
+        "summary": "Get an upload's resume point and status",
+        "tags": ["uploads"],
+        "x-capability": "upload",
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Upload status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Discard a staged upload",
+        "tags": ["uploads"],
+        "x-capability": "upload",
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Discarded (idempotent)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uploadId": {
+                      "type": "string"
+                    },
+                    "deleted": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/upload/{uploadId}/complete": {
+      "post": {
+        "summary": "Complete a staged upload",
+        "tags": ["uploads"],
+        "x-capability": "upload",
+        "parameters": [
+          {
+            "name": "uploadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "sha256": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Completed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "uploadId": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "sizeBytes": {
+                      "type": "integer"
+                    },
+                    "sha256": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/targets/{targetId}/files": {
+      "post": {
+        "summary": "Attach staged uploads to a file input",
+        "description": "Names uploadIds, never a filesystem path: see files/safe-name.ts for why no route here accepts a caller-supplied path.",
+        "tags": ["targets", "uploads"],
+        "x-capability": "upload",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["selector", "uploadIds"],
+                "properties": {
+                  "selector": {
+                    "type": "string"
+                  },
+                  "uploadIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Attached",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "targetId": {
+                      "type": "string"
+                    },
+                    "selector": {
+                      "type": "string"
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/downloads/{token}": {
+      "get": {
+        "summary": "Fetch a completed download by its one-shot signed token",
+        "description": "Public: no bearer token, no Principal resolved at all. The signed URL token itself is the authorization. Consumed exactly once; a second fetch of the same token 404s.",
+        "tags": ["downloads"],
+        "x-capability": null,
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The file bytes",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/events": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/viewers": {
+      "get": {
+        "summary": "Who is viewing and who is controlling this instance right now",
+        "description": "Live presence, out of band from the bgls.v1 WebSocket: per-viewer controlling/watching/idle state, a viewer/controlling count, and which targets have more than one simultaneous controller (contendedTargets). Answers correctly only for an instance whose live session is on THIS gateway process (live:false with an empty roster otherwise, never a guessed answer); see packages/server/src/rest/routes/presence.ts's own module doc for the cross-node caveat and the known kind/joinedAt gap (presenceFieldsUnavailable).",
+        "tags": ["instances"],
+        "x-capability": "view",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live presence for this instance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/instances/{instanceId}/recover": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "instanceId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}/streams": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}/notice": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}/viewers/{viewerId}": {
+      "delete": {
+        "summary": "Forcibly disconnect one viewer from a session",
+        "description": "The operator's tool for correcting a misbehaving connected viewer (human, agent, or CDP client): sends a goodbye envelope naming the reason, then closes that viewer's socket. Leaves every other viewer on the session untouched.",
+        "tags": ["sessions"],
+        "x-capability": "admin",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "viewerId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "reason",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "code",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Disconnected",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}/control": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}/control/{targetId}": {
+      "delete": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "targetId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{key}": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{key}/seed": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{key}/snapshots": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{key}/restore": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{key}/export": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/{key}/import": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/profiles/templates": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pools": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pools/{poolId}": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "poolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "poolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "poolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/pools/{poolId}/queue": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "poolId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/queue/{queueId}": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "queueId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/nodes": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/nodes/{nodeId}": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "nodeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/nodes/{nodeId}/drain": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "nodeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/nodes/{nodeId}/undrain": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "nodeId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/topology": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/audit": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/quotas": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/config": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/admin/preflight": {
+      "post": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/downloads": {
+      "get": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/downloads/{downloadId}": {
+      "delete": {
+        "summary": "Not implemented in this build",
+        "description": "Registered but not wired: this build answers 501 with a stub error body naming the route. See packages/server/src/rest/router.ts's STUB_PATHS table.",
+        "tags": ["stub"],
+        "x-status": "stub",
+        "parameters": [
+          {
+            "name": "downloadId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "501": {
+            "description": "Not implemented",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "An EdDSA-signed, capability-scoped token issued by POST /v1/tokens (or an app credential). GET /v1/downloads/:token is the one route that needs none."
+      }
+    },
+    "schemas": {
+      "ErrorBody": {
+        "type": "object",
+        "description": "The one error envelope shape every REST response uses.",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              },
+              "retryAfterMs": {
+                "type": "integer"
+              },
+              "details": {
+                "type": "object"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": ["code", "message", "retryable", "requestId"]
+          }
+        }
+      },
+      "TargetSummary": {
+        "type": "object",
+        "properties": {
+          "targetId": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "faviconUrl": {
+            "type": "string",
+            "nullable": true
+          },
+          "index": {
+            "type": "integer"
+          },
+          "windowId": {
+            "type": "integer",
+            "nullable": true
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "audible": {
+            "type": "boolean"
+          },
+          "muted": {
+            "type": "boolean"
+          },
+          "loading": {
+            "type": "boolean"
+          },
+          "canGoBack": {
+            "type": "boolean"
+          },
+          "canGoForward": {
+            "type": "boolean"
+          },
+          "openerTargetId": {
+            "type": "string",
+            "nullable": true
+          },
+          "viewers": {
+            "type": "integer"
+          },
+          "createdAt": {
+            "type": "integer"
+          }
+        }
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "An error, in the standard envelope",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorBody"
+            }
+          }
+        }
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "instances",
+      "description": "Acquire, list, describe, release, and attach to browser instances."
+    },
+    {
+      "name": "targets",
+      "description": "Drive one target (tab): list, create, close, navigate, screenshot, input, CDP passthrough."
+    },
+    {
+      "name": "sessions",
+      "description": "Live inspection of a running session and its viewers."
+    },
+    {
+      "name": "uploads",
+      "description": "Stage local bytes on the gateway so a target can attach them."
+    },
+    {
+      "name": "downloads",
+      "description": "Fetch a browser-initiated download by its one-shot signed URL."
+    },
+    {
+      "name": "auth",
+      "description": "Token issuance."
+    },
+    {
+      "name": "stub",
+      "description": "Registered, capability-null, always 501: not implemented in this build."
+    }
+  ]
+}

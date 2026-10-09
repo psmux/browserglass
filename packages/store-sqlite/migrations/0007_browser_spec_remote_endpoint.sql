@@ -1,0 +1,34 @@
+-- 0007_browser_spec_remote_endpoint.sql
+--
+-- Adds `browser_specs.remote_endpoint_name`, the durable home for
+-- `BrowserSpec.remoteEndpointName` (`packages/protocol/src/domain/entities.ts`,
+-- "Names the `RemoteEndpoint` ... a launch destined for a `'remote'`
+-- runtime kind must attach to"). Direct sibling of
+-- `0006_browser_spec_init_scripts.sql`: another `BrowserSpec` field that
+-- was always accepted, validated, and content addressed into a spec
+-- digest, but had no column to land in.
+--
+-- Before this migration the round trip was structurally impossible, not
+-- merely unimplemented: `StoredBrowserSpec`
+-- (`packages/protocol/src/domain/store-types.ts`) carried no
+-- `remoteEndpointName` field at all, so `mappers.ts`'s
+-- `storedSpecToBrowserSpec` had nothing to read and every expansion of a
+-- stored spec came back with no endpoint named, regardless of what a pool
+-- was built with. `RemoteRuntime.launch`
+-- (`packages/runtime-remote/src/runtime.ts`) has exactly one channel for
+-- learning which operator-registered `RemoteEndpoint` a launch targets:
+-- `LaunchRequest.labels[REMOTE_ENDPOINT_LABEL_KEY]`, which `router`'s
+-- `LocalNode` populates straight from this field. With nowhere to persist
+-- it, that label was never set on a real acquire, and every attach to an
+-- externally launched Chrome failed `E_SPEC_CONFLICT` no matter how the
+-- pool's spec was configured.
+--
+-- Plain `TEXT`, nullable, no default: unlike `client_hints`/`init_scripts`,
+-- this field has no nested structure, so it needs no JSON encoding, the
+-- same as the existing `locale`/`timezone`/`user_agent` columns already on
+-- this table. NULL means "no registered endpoint named for this spec",
+-- which is both the correct meaning for a caller who never set
+-- `remoteEndpointName` and the only meaning a row written before this
+-- migration can have, since nothing about a pre-existing spec's endpoint
+-- was ever recorded anywhere to backfill from.
+ALTER TABLE browser_specs ADD COLUMN remote_endpoint_name TEXT;

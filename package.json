@@ -1,0 +1,41 @@
+{
+  "name": "browserglass-monorepo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "BrowserGlass monorepo root. Private, workspace orchestration only.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@11.22.0",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "tsc -b",
+    "test": "pnpm -r run test",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "check:deps": "node scripts/check-deps.mjs",
+    "check:exports": "node scripts/check-exports.mjs",
+    "check:size": "node scripts/check-size.mjs",
+    "check": "pnpm run typecheck && pnpm run check:deps && pnpm run check:exports && pnpm run check:size && pnpm run check:packed",
+    "clean": "pnpm -r --parallel exec rimraf dist .tsbuildinfo",
+    "changeset": "changeset",
+    "check:packed": "node scripts/check-packed-manifests.mjs",
+    "bgls": "bgls",
+    "build:plugins": "npm --prefix plugins/plugin-video-export install --no-audit --no-fund && npm --prefix plugins/plugin-video-export run build"
+  },
+  "devDependencies": {
+    "@arethetypeswrong/cli": "^0.18.5",
+    "@biomejs/biome": "^1.9.4",
+    "@browserglass/cli": "workspace:*",
+    "@changesets/changelog-github": "^1.0.0",
+    "@changesets/cli": "^2.27.11",
+    "esbuild": "^0.24.2",
+    "publint": "^0.2.12",
+    "rimraf": "^6.0.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

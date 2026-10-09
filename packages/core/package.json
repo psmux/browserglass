@@ -1,0 +1,66 @@
+{
+  "name": "@browserglass/core",
+  "version": "0.1.0-alpha.0",
+  "description": "The live session engine: CDP bridge, streaming pipeline, input dispatch, control lease, and the recovery ladder. Transport agnostic.",
+  "keywords": [
+    "browserglass",
+    "browser",
+    "chrome",
+    "cdp",
+    "remote-browser",
+    "session",
+    "streaming",
+    "devtools-protocol"
+  ],
+  "homepage": "https://github.com/psmux/browserglass/tree/main/packages/core#readme",
+  "bugs": {
+    "url": "https://github.com/psmux/browserglass/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/psmux/browserglass.git",
+    "directory": "packages/core"
+  },
+  "license": "Apache-2.0",
+  "author": "Godwin Josh",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "browserglass": {
+    "layer": 4
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "node ../../scripts/guard-publisher.mjs"
+  },
+  "dependencies": {
+    "@browserglass/protocol": "workspace:^",
+    "sharp": "^0.33.5"
+  }
+}

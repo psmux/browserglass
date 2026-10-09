@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>BrowserGlass Embed Demo</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!--
+  Zero build step, by design: this file is the deliverable, not a source
+  file for one. Open it directly (file://) or serve this directory with
+  any static file server; there is no bundler, no npm install, and no
+  compile step for THIS file. `@browserglass/embed` itself does have a
+  build step (tsup, see packages/embed/tsup.config.ts) because it bundles
+  its own dependencies into one script; run `pnpm --filter
+  @browserglass/embed build` once from the repo root before opening this
+  page, so packages/embed/dist/browserglass-embed.global.js exists for
+  the <script src> below to load. That script tag is the only thing here
+  that is not plain HTML, CSS, and inline JS.
+
+  What you need to actually see something live: a running BrowserGlass
+  gateway (`bgls serve`, or any `@browserglass/server` instance), a
+  bearer token minted against it, and the ids of one or more targets
+  (browser tabs) already open in a browser instance that gateway
+  manages. The gateway URL and token fields below are exactly what
+  `packages/react/src/BrowserGlass.tsx`'s own `url`/`token` props need,
+  because this widget is a thin wrapper over the same
+  `@browserglass/client` connection underneath. See this directory's own
+  README, and packages/embed/README.md, for where those three things
+  come from in a real app.
+
+  This page's own origin (file://, or wherever you serve this directory
+  from) is almost never the gateway's own origin, and the gateway allows
+  NO origin by default: start it with an origin list that includes this
+  page's, e.g. `bgls serve --cors http://localhost:5500` (whatever this
+  page is actually served from), or `--cors "*"` for local, throwaway
+  testing only, never in production. With no matching origin configured,
+  every pane below sits in the `fatal` state with a 403 on the socket
+  upgrade, and the browser's own devtools console is where that shows up,
+  not this page's event log. See docs/quickstart.md and
+  packages/server/src/rest/cors.ts's own module doc for the REST half of
+  the same origin list.
+-->
+<style>
+  :root {
+    --bg: #0a0b0f;
+    --panel: #13151c;
+    --panel-2: #1a1d27;
+    --border: #262a37;
+    --text: #e7e9f1;
+    --text-dim: #8890a4;
+    --accent: #5ec9ff;
+    --accent-dim: #2b3f4d;
+    --good: #6fe0a0;
+    --warn: #ffcb6b;
+    --bad: #ff6b81;
+    --mono: ui-monospace, "JetBrains Mono", "Cascadia Code", "Fira Code", Menlo, Consolas, monospace;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 14px;
+  }
+
+  body {
+    padding: 1.5rem;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  header.page {
+    margin-bottom: 1.5rem;
+  }
+
+  header.page h1 {
+    font-size: 1.25rem;
+    margin: 0 0 0.35rem;
+    letter-spacing: -0.01em;
+  }
+
+  header.page h1 .tag {
+    color: var(--accent);
+  }
+
+  header.page p {
+    margin: 0;
+    color: var(--text-dim);
+    max-width: 68ch;
+    line-height: 1.5;
+  }
+
+  a {
+    color: var(--accent);
+  }
+
+  code {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.05em 0.35em;
+  }
+
+  fieldset {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    padding: 0.9rem 1rem 1rem;
+    margin: 0 0 1.25rem;
+  }
+
+  legend {
+    padding: 0 0.4em;
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem;
+    align-items: center;
+  }
+
+  label.field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--text-dim);
+  }
+
+  label.field.grow {
+    flex: 1 1 260px;
+  }
+
+  input[type="text"], input[type="password"] {
+    font: inherit;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 0.45rem 0.55rem;
+    min-width: 0;
+  }
+
+  input[type="text"]:focus, input[type="password"]:focus {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+  }
+
+  button {
+    font: inherit;
+    background: var(--accent-dim);
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: 0.45rem 0.8rem;
+    cursor: pointer;
+  }
+
+  button:hover {
+    background: var(--accent);
+    color: #04121a;
+  }
+
+  button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  button.ghost {
+    background: transparent;
+    color: var(--text-dim);
+    border-color: var(--border);
+  }
+
+  button.ghost:hover {
+    color: var(--text);
+    background: var(--panel-2);
+  }
+
+  .panes {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+  }
+
+  .pane {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .pane header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.7rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel-2);
+  }
+
+  .pane header .title {
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .pane header input {
+    flex: 1;
+    font-size: 0.8rem;
+    padding: 0.3rem 0.45rem;
+  }
+
+  .state-badge {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 0.15em 0.5em;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    white-space: nowrap;
+  }
+
+  .state-badge[data-tone="good"] { color: var(--good); border-color: var(--good); }
+  .state-badge[data-tone="warn"] { color: var(--warn); border-color: var(--warn); }
+  .state-badge[data-tone="bad"] { color: var(--bad); border-color: var(--bad); }
+
+  /*
+    <browser-glass> ships no default size; the host decides. A 16:10 box
+    via aspect-ratio keeps every pane's canvas visible without any pane
+    collapsing to zero height, which is what happens if you forget this.
+  */
+  browser-glass {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    --bgls-bg: #05060a;
+    --bgls-placeholder-fg: #626a7d;
+  }
+
+  /*
+    ::part() styling: <browser-glass> exposes `container`, `canvas`,
+    `placeholder`, and `badge` as CSS parts specifically so a host page
+    can reach into its shadow DOM like this without breaking encapsulation.
+  */
+  browser-glass::part(placeholder) {
+    font-family: var(--mono);
+    font-size: 0.72rem;
+  }
+
+  browser-glass[error]::part(placeholder) {
+    color: var(--bad);
+  }
+
+  .pane-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    padding: 0.55rem 0.7rem;
+    border-top: 1px solid var(--border);
+  }
+
+  .pane-actions button {
+    font-size: 0.75rem;
+    padding: 0.35rem 0.6rem;
+  }
+
+  .thumbs {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    padding: 0 0.7rem 0.6rem;
+  }
+
+  .thumbs img {
+    height: 64px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+
+  section.block {
+    margin-bottom: 1.25rem;
+  }
+
+  section.block > h2 {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-dim);
+    margin: 0 0 0.6rem;
+    font-weight: 600;
+  }
+
+  .duplicate-demo {
+    display: grid;
+    grid-template-columns: minmax(260px, 340px) 1fr;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .duplicate-demo p {
+    color: var(--text-dim);
+    line-height: 1.5;
+    margin: 0 0 0.7rem;
+  }
+
+  #log {
+    height: 220px;
+    overflow-y: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 0.7rem;
+    font-size: 0.75rem;
+    line-height: 1.55;
+  }
+
+  #log .entry {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  #log .entry .t {
+    color: var(--text-dim);
+  }
+
+  #log .entry .k {
+    color: var(--accent);
+  }
+
+  #log .entry.tone-bad .k {
+    color: var(--bad);
+  }
+
+  #log .entry.tone-good .k {
+    color: var(--good);
+  }
+
+  footer.page {
+    color: var(--text-dim);
+    font-size: 0.75rem;
+    margin-top: 2rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+  }
+</style>
+</head>
+<body>
+
+<header class="page">
+  <h1><span class="tag">&lt;browser-glass&gt;</span> embed demo</h1>
+  <p>
+    Three live, independently drivable panes from one script tag and one gateway
+    connection. No React, no bundler. Fill in a gateway URL, a bearer token, and
+    up to three target ids below, then Connect.
+  </p>
+</header>
+
+<fieldset>
+  <legend>Gateway</legend>
+  <div class="row">
+    <label class="field grow">
+      Gateway WebSocket URL
+      <input type="text" id="url" placeholder="wss://your-gateway/browserglass/socket or ws://localhost:7443/browserglass/socket" />
+    </label>
+    <label class="field grow">
+      Bearer token
+      <input type="password" id="token" placeholder="the token your app's backend minted" />
+    </label>
+    <button id="connect-all">Connect all panes</button>
+  </div>
+</fieldset>
+
+<section class="block">
+  <h2>Three panes, one connection</h2>
+  <div class="panes" id="panes"></div>
+</section>
+
+<fieldset>
+  <legend>Drive all three at once</legend>
+  <div class="row">
+    <label class="field grow">
+      URL to navigate every pane to
+      <input type="text" id="drive-url" placeholder="https://example.com" value="https://example.com" />
+    </label>
+    <button id="drive-navigate">Navigate all</button>
+    <button id="drive-reload">Reload all</button>
+    <button id="drive-screenshot">Screenshot all</button>
+  </div>
+</fieldset>
+
+<section class="block">
+  <h2>Duplicate-target queue, live</h2>
+  <div class="duplicate-demo">
+    <p>
+      This fourth widget is deliberately pointed at <strong>Pane 1's own target
+      id</strong>. Two <code>&lt;browser-glass&gt;</code> elements on the same
+      target, sharing the same gateway connection, cannot both paint a
+      picture at once (there is exactly one canvas per subscribed stream);
+      this one starts in the <code>duplicate-target</code> error state
+      instead of silently fighting Pane 1 for the same canvas. Disconnect
+      Pane 1 below and this one attaches automatically, using the wire
+      subscription that was kept alive for it the whole time.
+    </p>
+    <div class="row">
+      <button id="disconnect-pane-1" class="ghost">Disconnect Pane 1</button>
+      <button id="reconnect-pane-1" class="ghost">Reconnect Pane 1</button>
+    </div>
+    <div class="pane" style="margin-top: 0.8rem; max-width: 420px;">
+      <header>
+        <span class="title">Duplicate of Pane 1</span>
+        <span class="state-badge" id="dup-badge">idle</span>
+      </header>
+      <browser-glass id="dup-widget" fit="contain" readonly></browser-glass>
+    </div>
+  </div>
+</section>
+
+<section class="block">
+  <h2>Event log</h2>
+  <div id="log"></div>
+</section>
+
+<footer class="page">
+  Source: <code>examples/embed-demo/index.html</code>. Widget package:
+  <code>packages/embed</code>. Build it once with
+  <code>pnpm --filter @browserglass/embed build</code> before opening this page.
+</footer>
+
+<script src="../../packages/embed/dist/browserglass-embed.global.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var PANE_COUNT = 3;
+  var logEl = document.getElementById("log");
+
+  function log(kind, text, tone) {
+    var entry = document.createElement("div");
+    entry.className = "entry" + (tone ? " tone-" + tone : "");
+    var time = new Date().toLocaleTimeString();
+    entry.innerHTML =
+      '<span class="t">' + time + "</span> <span class=\"k\">" + kind + "</span> " +
+      text.replace(/[<>&]/g, function (c) {
+        return c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&amp;";
+      });
+    logEl.appendChild(entry);
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  // Every event <browser-glass> can dispatch, wired once per widget below.
+  // This is the load-bearing part of the SDK for a plain HTML page: no
+  // React callbacks to pass in, just addEventListener.
+  function wireEvents(el, label) {
+    el.addEventListener("bgls:connected", function (e) {
+      log(label, "connected (viewer " + e.detail.viewerId + ")", "good");
+    });
+    el.addEventListener("bgls:disconnected", function (e) {
+      log(label, "disconnected: " + e.detail.reason, e.detail.willReconnect ? null : "bad");
+    });
+    el.addEventListener("bgls:controlgained", function () {
+      log(label, "took control", "good");
+    });
+    el.addEventListener("bgls:controllost", function (e) {
+      log(label, "lost control: " + e.detail.reason);
+    });
+    el.addEventListener("bgls:navigation", function (e) {
+      log(label, "navigated: " + e.detail.url + (e.detail.loading ? " (loading)" : ""));
+    });
+    el.addEventListener("bgls:console", function (e) {
+      log(label, "console." + e.detail.level + ": " + e.detail.text);
+    });
+    el.addEventListener("bgls:pageerror", function (e) {
+      log(label, "page error: " + e.detail.message, "bad");
+    });
+    el.addEventListener("bgls:error", function (e) {
+      log(label, "[" + e.detail.code + "] " + e.detail.message, "bad");
+    });
+  }
+
+  function toneForState(state) {
+    if (state === "live") return "good";
+    if (state === "degraded" || state === "reconnecting" || state === "resuming" || state === "connecting") return "warn";
+    if (state === "fatal") return "bad";
+    return null;
+  }
+
+  // <browser-glass> reflects its own status as plain attributes
+  // (`state`, `has-control`, `error`) specifically so a host page can
+  // read them with nothing fancier than a MutationObserver, the same way
+  // you would watch any other element's attributes.
+  function watchBadge(el, badgeEl) {
+    var update = function () {
+      var state = el.getAttribute("state") || "idle";
+      var error = el.getAttribute("error");
+      badgeEl.textContent = error ? error : state;
+      badgeEl.dataset.tone = error ? "bad" : toneForState(state) || "";
+    };
+    new MutationObserver(update).observe(el, { attributes: true, attributeFilter: ["state", "error", "has-control"] });
+    update();
+  }
+
+  function buildPane(index) {
+    var wrap = document.createElement("div");
+    wrap.className = "pane";
+    wrap.innerHTML =
+      '<header>' +
+        '<span class="title">Pane ' + index + '</span>' +
+        '<input type="text" class="target-input" placeholder="target id for pane ' + index + '" />' +
+        '<span class="state-badge">idle</span>' +
+      '</header>' +
+      '<browser-glass fit="contain"></browser-glass>' +
+      '<div class="pane-actions">' +
+        '<button data-action="control">Take control</button>' +
+        '<button data-action="release" class="ghost">Release</button>' +
+        '<button data-action="reload" class="ghost">Reload</button>' +
+        '<button data-action="screenshot" class="ghost">Screenshot</button>' +
+      '</div>' +
+      '<div class="thumbs"></div>';
+
+    document.getElementById("panes").appendChild(wrap);
+
+    var widget = wrap.querySelector("browser-glass");
+    var targetInput = wrap.querySelector(".target-input");
+    var badge = wrap.querySelector(".state-badge");
+    var thumbs = wrap.querySelector(".thumbs");
+    var label = "pane " + index;
+
+    wireEvents(widget, label);
+    watchBadge(widget, badge);
+
+    wrap.querySelector('[data-action="control"]').addEventListener("click", function () {
+      widget.takeControl().catch(function (err) { log(label, "takeControl() failed: " + err.message, "bad"); });
+    });
+    wrap.querySelector('[data-action="release"]').addEventListener("click", function () {
+      widget.releaseControl().catch(function (err) { log(label, "releaseControl() failed: " + err.message, "bad"); });
+    });
+    wrap.querySelector('[data-action="reload"]').addEventListener("click", function () {
+      widget.reload().catch(function (err) { log(label, "reload() failed: " + err.message, "bad"); });
+    });
+    wrap.querySelector('[data-action="screenshot"]').addEventListener("click", function () {
+      widget.screenshot().then(function (result) {
+        var img = document.createElement("img");
+        img.src = URL.createObjectURL(result.blob);
+        img.title = result.width + "x" + result.height;
+        thumbs.appendChild(img);
+        log(label, "screenshot captured (" + result.sizeBytes + " bytes)", "good");
+      }).catch(function (err) {
+        log(label, "screenshot() failed: " + err.message, "bad");
+      });
+    });
+
+    // Clicking anywhere inside a pane's live picture is how a real user
+    // takes control; clicking a spot on the canvas through the imperative
+    // API is the scripted equivalent, used here by "Navigate/Reload all".
+    return { widget: widget, targetInput: targetInput, label: label };
+  }
+
+  var panes = [];
+  for (var i = 1; i <= PANE_COUNT; i++) panes.push(buildPane(i));
+
+  var urlInput = document.getElementById("url");
+  var tokenInput = document.getElementById("token");
+
+  document.getElementById("connect-all").addEventListener("click", function () {
+    var url = urlInput.value.trim();
+    var token = tokenInput.value.trim();
+    if (!url) {
+      log("demo", "enter a gateway URL first", "bad");
+      return;
+    }
+    panes.forEach(function (pane) {
+      var targetId = pane.targetInput.value.trim();
+      if (!targetId) {
+        log(pane.label, "no target id entered, skipping", "bad");
+        return;
+      }
+      // Setting these three attributes is the entire API surface needed
+      // to connect a pane: BrowserGlassElement's attributeChangedCallback
+      // does the rest (acquire a shared client, subscribe, attach).
+      pane.widget.setAttribute("url", url);
+      if (token) pane.widget.setAttribute("token", token);
+      pane.widget.setAttribute("target-id", targetId);
+    });
+    dupWidget.setAttribute("url", url);
+    if (token) dupWidget.setAttribute("token", token);
+    if (panes[0].targetInput.value.trim()) {
+      dupWidget.setAttribute("target-id", panes[0].targetInput.value.trim());
+    }
+  });
+
+  document.getElementById("drive-navigate").addEventListener("click", function () {
+    var target = document.getElementById("drive-url").value.trim();
+    if (!target) return;
+    panes.forEach(function (pane) {
+      pane.widget.navigate(target).catch(function (err) { log(pane.label, "navigate() failed: " + err.message, "bad"); });
+    });
+  });
+
+  document.getElementById("drive-reload").addEventListener("click", function () {
+    panes.forEach(function (pane) {
+      pane.widget.reload().catch(function (err) { log(pane.label, "reload() failed: " + err.message, "bad"); });
+    });
+  });
+
+  document.getElementById("drive-screenshot").addEventListener("click", function () {
+    panes.forEach(function (pane) {
+      pane.widget.screenshot().catch(function (err) { log(pane.label, "screenshot() failed: " + err.message, "bad"); });
+    });
+  });
+
+  // --- duplicate-target demo -------------------------------------------
+
+  var dupWidget = document.getElementById("dup-widget");
+  var dupBadge = document.getElementById("dup-badge");
+  wireEvents(dupWidget, "duplicate");
+  watchBadge(dupWidget, dupBadge);
+
+  document.getElementById("disconnect-pane-1").addEventListener("click", function () {
+    panes[0].widget.removeAttribute("target-id");
+    panes[0].widget.removeAttribute("url");
+    log("demo", "Pane 1 disconnected; watch the duplicate widget above take over.");
+  });
+
+  document.getElementById("reconnect-pane-1").addEventListener("click", function () {
+    var url = urlInput.value.trim();
+    var token = tokenInput.value.trim();
+    var targetId = panes[0].targetInput.value.trim();
+    if (!url || !targetId) {
+      log("demo", "enter a URL and Pane 1's target id, then Connect all, before reconnecting it", "bad");
+      return;
+    }
+    panes[0].widget.setAttribute("url", url);
+    if (token) panes[0].widget.setAttribute("token", token);
+    panes[0].widget.setAttribute("target-id", targetId);
+  });
+
+  log("demo", "ready. Fill in the gateway URL, token, and target ids above, then Connect all.");
+})();
+</script>
+</body>
+</html>

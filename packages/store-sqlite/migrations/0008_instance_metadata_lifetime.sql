@@ -1,0 +1,41 @@
+-- 0008_instance_metadata_lifetime.sql
+--
+-- Adds `instances.metadata` and `instances.lifetime`, the durable homes for
+-- `Instance.metadata` and `Instance.lifetime`
+-- (`packages/protocol/src/domain/entities.ts:615,619`). This is the same
+-- shape of bug as `0006_browser_spec_init_scripts.sql`/
+-- `0007_browser_spec_remote_endpoint.sql` (the third and fourth times a
+-- field was accepted and validated but had no column to land in), except
+-- on `instances` rather than `browser_specs`, and it is the fourth
+-- occurrence of the pattern, not the third: `AcquireArgs.metadata`
+-- (`router/src/router/types.ts`) let a caller name a browser on acquire,
+-- and `mappers.ts`'s `rowToInstance` hardcoded `metadata: {}` on every
+-- read, so the name never survived past the acquiring call. `lifetime` was
+-- worse: the domain type distinguishes `'viewer-bound'` (release once the
+-- last viewer leaves) from `'explicit'` (release only on an explicit call
+-- or `maxDurationMs`, `router/src/router/config.ts`), but
+-- `rowToInstance` hardcoded the literal `'viewer-bound'` for every
+-- instance, so `'explicit'` could never be expressed at all: the row had
+-- no column to remember the caller's choice in even if the router had
+-- tried to pass it through.
+--
+-- `metadata` is `TEXT NOT NULL DEFAULT '{}'`, a JSON object, same
+-- convention as `browser_specs.args`/`.extensions`/`.limits`
+-- (`0001_initial.sql`): caller supplied, free form string-to-string pairs,
+-- capped by `router`'s `validateAcquireMetadata`
+-- (`packages/router/src/router/instanceMetadata.ts`) at admission time,
+-- never at the store, since the store has no way to reject a write short
+-- of throwing away the caller's acquire. Two conventional keys, `name` and
+-- `description`, are documented there for the REST inventory route to
+-- display consistently; nothing here enforces that convention, since
+-- `metadata` stays free form for every other key.
+--
+-- `lifetime` is `TEXT NOT NULL DEFAULT 'viewer-bound'`, CHECK constrained
+-- to the same two values `Instance.lifetime` allows, so a row can never
+-- disagree with the domain type about what values exist. Defaulting to
+-- `'viewer-bound'` matches the value every row had implicitly, by way of
+-- `rowToInstance`'s hardcode, before this column existed: a row written
+-- before this migration keeps behaving exactly as it always did.
+ALTER TABLE instances ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE instances ADD COLUMN lifetime TEXT NOT NULL DEFAULT 'viewer-bound'
+  CHECK (lifetime IN ('viewer-bound', 'explicit'));

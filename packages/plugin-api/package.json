@@ -1,0 +1,56 @@
+{
+  "name": "@browserglass/plugin-api",
+  "version": "0.1.0-alpha.0",
+  "description": "The plugin manifest types, the frame-encoder and permission-assist interfaces, and the run-time validators a plugin author and the CLI loader both build against. Zero runtime dependencies.",
+  "keywords": ["browserglass", "browser", "chrome", "cdp", "plugin", "extension"],
+  "homepage": "https://github.com/psmux/browserglass/tree/main/packages/plugin-api#readme",
+  "bugs": {
+    "url": "https://github.com/psmux/browserglass/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/psmux/browserglass.git",
+    "directory": "packages/plugin-api"
+  },
+  "license": "Apache-2.0",
+  "author": "Godwin Josh",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "browserglass": {
+    "layer": null
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "node ../../scripts/guard-publisher.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7"
+  }
+}

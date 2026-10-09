@@ -1,0 +1,34 @@
+-- 0006_browser_spec_init_scripts.sql
+--
+-- Adds `browser_specs.init_scripts`, the durable home for
+-- `BrowserSpec.initScripts` (`packages/protocol/src/domain/entities.ts`,
+-- "JavaScript this Instance's browser evaluates before any page script, on
+-- every document the browser navigates to"). Direct sibling of
+-- `0005_browser_spec_client_hints.sql`: another `BrowserSpec` field that
+-- is validated and content addressed into a spec digest by
+-- `resolveBrowserSpec` (`settings.ts`), but had no column to land in.
+--
+-- Before this migration the round trip was structurally impossible, not
+-- merely unimplemented: `StoredBrowserSpec`
+-- (`packages/protocol/src/domain/store-types.ts`) carried no `initScripts`
+-- field at all, so `mappers.ts`'s `storedSpecToBrowserSpec` had nothing to
+-- read and hardcoded `initScripts: []` on every expansion regardless of
+-- what a caller had set, and `TargetRegistry`
+-- (`packages/core/src/cdp/target-registry.ts`) never installed anything.
+-- The motivating case: an automation that needs a form's own submit
+-- handler neutralised (a `BLOCK_SUBMIT_JS` style script) before it can
+-- safely fill a real application form, which only works if the script
+-- BrowserGlass installed at launch is still the script running after the
+-- Instance is torn down and rebuilt from its stored spec, for example on a
+-- warm pool reuse or a gateway restart.
+--
+-- JSON `TEXT`, nullable, no default: same shape as `client_hints` two rows
+-- above it. NULL means "no init scripts recorded for this spec", which is
+-- both the correct meaning for a caller who never set `initScripts` and
+-- the only meaning a row written before this migration can have, since
+-- nothing about a pre-existing spec's init scripts was ever recorded
+-- anywhere to backfill from. `storedSpecToBrowserSpec` reads a NULL column
+-- the same way it reads an absent one: `BrowserSpec.initScripts` comes back
+-- `[]`, which is the same value it always returned before this migration
+-- existed, so an old row's meaning does not change.
+ALTER TABLE browser_specs ADD COLUMN init_scripts TEXT;

@@ -1,0 +1,24 @@
+{
+  "name": "browserglass-plugin-video-export",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Reference frame-encoder plugin (docs/plugins.md): turns a recording's exported frames into a video file via a system ffmpeg. A real, separate npm project, deliberately excluded from the root pnpm-workspace.yaml, the same way examples/nextjs-demo is (see its README): its @browserglass/plugin-api dependency points at file:../../packages/plugin-api, which resolves through that package's real exports map exactly the way an actual plugin author's npm install @browserglass/plugin-api would once it is published.",
+  "type": "module",
+  "main": "dist/plugin.mjs",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@browserglass/plugin-api": "file:../../packages/plugin-api",
+    "@types/node": "^22.10.7",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

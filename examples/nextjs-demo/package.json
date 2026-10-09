@@ -1,0 +1,35 @@
+{
+  "name": "browserglass-nextjs-demo",
+  "private": true,
+  "version": "0.0.0",
+  "description": "End to end BrowserGlass demo: a Next.js custom server showing three concurrent, independently controllable tabs of one real Chrome, streamed to the browser over one socket.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "node server.mjs",
+    "build": "next build",
+    "start": "cross-env NODE_ENV=production node server.mjs"
+  },
+  "dependencies": {
+    "@browserglass/server": "file:../../packages/server",
+    "@browserglass/store-sqlite": "file:../../packages/store-sqlite",
+    "@browserglass/runtime-host": "file:../../packages/runtime-host",
+    "@browserglass/react": "file:../../packages/react",
+    "@browserglass/automation": "file:../../packages/automation",
+    "@browserglass/client": "file:../../packages/client",
+    "@browserglass/protocol": "file:../../packages/protocol",
+    "next": "^15.5.4",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "cross-env": "^7.0.3",
+    "typescript": "^5.7.3"
+  }
+}

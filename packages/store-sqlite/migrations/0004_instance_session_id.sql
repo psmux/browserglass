@@ -1,0 +1,49 @@
+-- 0004_instance_session_id.sql
+--
+-- Adds `instances.session_id`, the durable home for `Instance.sessionId`
+-- (the live session the router created for this instance when it launched).
+-- Direct sibling of `0003_instance_expires_at.sql`, and added for exactly
+-- the same reason: `BrowserRouter.placeAndLaunch` has always passed
+-- `sessionId` in the `transitionInstance` patch that lands a new instance
+-- on `'live'`, there was no column for it, so the patch field was silently
+-- dropped and `mappers.ts`'s `rowToInstance` hardcoded `sessionId: null`
+-- for every instance ever read back.
+--
+-- The column earns its place rather than merely completing a shape. Three
+-- production readers branch on `Instance.sessionId` and all three were
+-- getting the hardcoded null:
+--
+--   * `server/src/session/factory.ts`: `view.instance.sessionId ?? newId('sess')`,
+--     with a comment stating that `Instance.sessionId` is authoritative
+--     "when the router already created it". It always was created, and
+--     never readable, so the gateway minted a SECOND session id for a
+--     session the router had already written a `sessions` row for.
+--   * `router/src/router/BrowserRouter.ts` `buildResult`: every
+--     `AcquireResult` reported an empty session id to its caller.
+--   * `protocol/src/domain/invariants.ts` INV-10 ("an Instance in `ready`
+--     has a non null `nodeId` and a non null `sessionId`") could never
+--     hold for a row read out of this store.
+--
+-- Nullable, no default, which is what an `ALTER TABLE ADD COLUMN` carrying
+-- a foreign key requires on SQLite in any case. An instance still in
+-- `launching`/`warm` has not reached the transition that sets this, and a
+-- row written before this migration never had the chance, so NULL keeps
+-- meaning exactly what `rowToInstance` already meant by it: "no session
+-- known for this instance". Rows created before this fix stay NULL forever;
+-- there is no backfill, because the association was never recorded on this
+-- side and `profile_leases`/`sessions` cannot reconstruct which of an
+-- instance's sessions was the current one at any given moment.
+--
+-- ON DELETE SET NULL, not RESTRICT and not CASCADE, consistent with the
+-- FK reasoning block on `instances` in `0001_initial.sql`:
+--   * RESTRICT would make `purgeTable('sessions', ...)` (`purge.ts`, which
+--     deletes ended sessions past their retention window) fail against any
+--     instance still pointing at the purged session.
+--   * CASCADE would delete the INSTANCE when its session is purged, which
+--     destroys audit history over a retention sweep.
+--   * SET NULL degrades to precisely the pre-migration meaning: the
+--     session row is gone, so the instance honestly knows nothing about it.
+-- No index: nothing queries instances by session id. The reverse direction
+-- (`sessions.instance_id`) is the indexed one and stays the way you list
+-- every session an instance ever had.
+ALTER TABLE instances ADD COLUMN session_id TEXT REFERENCES sessions(id) ON DELETE SET NULL;

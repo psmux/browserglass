@@ -1,0 +1,60 @@
+{
+  "name": "@browserglass/client",
+  "version": "0.1.0-alpha.0",
+  "description": "Framework agnostic browser client: transport state machine, binary frame decode, canvas renderer, and input capture. Zero Node builtins.",
+  "keywords": [
+    "browserglass",
+    "browser",
+    "chrome",
+    "cdp",
+    "remote-browser",
+    "canvas",
+    "streaming",
+    "browser-client"
+  ],
+  "homepage": "https://github.com/psmux/browserglass/tree/main/packages/client#readme",
+  "bugs": {
+    "url": "https://github.com/psmux/browserglass/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/psmux/browserglass.git",
+    "directory": "packages/client"
+  },
+  "license": "Apache-2.0",
+  "author": "Godwin Josh",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "browserglass": {
+    "layer": null
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "node ../../scripts/guard-publisher.mjs"
+  },
+  "dependencies": {
+    "@browserglass/protocol": "workspace:^"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  }
+}

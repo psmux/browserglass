@@ -1,0 +1,53 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist-tsc",
+    "rootDir": "src",
+    "tsBuildInfoFile": "./dist-tsc/.tsbuildinfo"
+  },
+  "include": ["src"],
+  "references": [
+    {
+      "path": "../protocol"
+    },
+    {
+      "path": "../core"
+    },
+    {
+      "path": "../router"
+    },
+    {
+      "path": "../server"
+    },
+    {
+      "path": "../client"
+    },
+    {
+      "path": "../react"
+    },
+    {
+      "path": "../automation"
+    },
+    {
+      "path": "../runtime-host"
+    },
+    {
+      "path": "../runtime-remote"
+    },
+    {
+      "path": "../runtime-docker"
+    },
+    {
+      "path": "../runtime-k8s"
+    },
+    {
+      "path": "../store-sqlite"
+    },
+    {
+      "path": "../store-postgres"
+    },
+    {
+      "path": "../conformance"
+    }
+  ]
+}

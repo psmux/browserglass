@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>BrowserGlass minimal example</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root { color-scheme: dark; --border: #2a2e3a; --dim: #8b93a7; }
+  body {
+    margin: 0; padding: 2rem; background: #0b0c10; color: #e6e8f0;
+    font: 14px/1.5 ui-monospace, Consolas, monospace;
+    max-width: 900px; margin-inline: auto;
+  }
+  h1 { font-size: 1rem; margin: 0 0 0.25rem; }
+  p { color: var(--dim); margin: 0 0 1.25rem; }
+  .bar { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+  input, button { font: inherit; border: 1px solid var(--border); border-radius: 6px; padding: 0.4rem 0.6rem; }
+  input { flex: 1; background: #14161d; color: inherit; }
+  button { background: #1d2a33; color: #5ec9ff; border-color: #5ec9ff; cursor: pointer; }
+  /* The element ships no default size, so the host page picks one. Without
+     this the pane collapses to zero height and paints nothing. */
+  browser-glass { display: block; width: 100%; aspect-ratio: 16 / 10; border: 1px solid var(--border); border-radius: 8px; }
+  #status { color: var(--dim); margin-top: 0.75rem; }
+  #status[data-bad="1"] { color: #ff6b81; }
+</style>
+</head>
+<body>
+
+<h1>A real Chrome, on a web page</h1>
+<p>
+  One custom element, one gateway, no bundler. Click inside the pane to drive
+  the browser, or type a URL below. Source: <code>examples/minimal/</code>.
+</p>
+
+<div class="bar">
+  <input id="url" type="text" value="https://example.com" />
+  <button id="go">Go</button>
+</div>
+
+<!-- token-endpoint is how the pane refreshes its own credential: the widget
+     re-fetches it when the current token expires, and keeps streaming. -->
+<browser-glass id="pane" fit="contain" token-endpoint="/session"></browser-glass>
+
+<p id="status">connecting...</p>
+
+<!-- The widget, served by the same Node process that runs the gateway. Build
+     it once with `pnpm --filter @browserglass/embed build`. In your own app
+     this is a file you copy into wherever your static assets already live. -->
+<script src="/embed.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var pane = document.getElementById("pane");
+  var status = document.getElementById("status");
+
+  function say(text, bad) {
+    status.textContent = text;
+    status.dataset.bad = bad ? "1" : "0";
+  }
+
+  // The element reflects what it is doing as plain attributes, so watching it
+  // needs nothing fancier than a MutationObserver.
+  new MutationObserver(function () {
+    var error = pane.getAttribute("error");
+    if (error) say("error: " + error, true);
+    else say("state: " + (pane.getAttribute("state") || "idle"));
+  }).observe(pane, { attributes: true, attributeFilter: ["state", "error"] });
+
+  pane.addEventListener("bgls:error", function (e) {
+    say("[" + e.detail.code + "] " + e.detail.message, true);
+  });
+
+  document.getElementById("go").addEventListener("click", function () {
+    pane.navigate(document.getElementById("url").value.trim()).catch(function (err) {
+      say("navigate() failed: " + err.message, true);
+    });
+  });
+
+  // The page asks the backend for its own credentials. Nothing is baked into
+  // this file: no token, no target id, no gateway address.
+  fetch("/session")
+    .then(function (r) { return r.json(); })
+    .then(function (s) {
+      if (s.error) throw new Error(s.error);
+      var proto = location.protocol === "https:" ? "wss" : "ws";
+      // Setting these three attributes is the whole integration. The element
+      // connects, subscribes, paints frames, and sends your input back.
+      pane.setAttribute("url", proto + "://" + location.host + s.wsPath);
+      pane.setAttribute("token", s.token);
+      pane.setAttribute("target-id", s.targetId);
+    })
+    .catch(function (err) { say("could not load /session: " + err.message, true); });
+})();
+</script>
+</body>
+</html>

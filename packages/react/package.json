@@ -1,0 +1,79 @@
+{
+  "name": "@browserglass/react",
+  "version": "0.1.0-alpha.0",
+  "description": "<BrowserGlass />, the eight hooks, and the unstyled UI primitives.",
+  "keywords": [
+    "browserglass",
+    "browser",
+    "chrome",
+    "cdp",
+    "remote-browser",
+    "react",
+    "react-component",
+    "hooks"
+  ],
+  "homepage": "https://github.com/psmux/browserglass/tree/main/packages/react#readme",
+  "bugs": {
+    "url": "https://github.com/psmux/browserglass/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/psmux/browserglass.git",
+    "directory": "packages/react"
+  },
+  "license": "Apache-2.0",
+  "author": "Godwin Josh",
+  "type": "module",
+  "sideEffects": ["./src/ui/styles.css", "./dist/ui/styles.css"],
+  "engines": {
+    "node": ">=22"
+  },
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "react-server": "./dist/index.react-server.mjs",
+      "browser": "./dist/index.mjs",
+      "default": "./dist/index.mjs"
+    },
+    "./ui": {
+      "types": "./dist/ui/index.d.ts",
+      "react-server": "./dist/ui/index.react-server.mjs",
+      "browser": "./dist/ui/index.mjs",
+      "default": "./dist/ui/index.mjs"
+    },
+    "./ui/styles.css": "./dist/ui/styles.css",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "browserglass": {
+    "layer": null
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepublishOnly": "node ../../scripts/guard-publisher.mjs"
+  },
+  "dependencies": {
+    "@browserglass/protocol": "workspace:^",
+    "@browserglass/client": "workspace:^"
+  },
+  "peerDependencies": {
+    "react": "^18.0.0 || ^19.0.0",
+    "react-dom": "^18.0.0 || ^19.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.1.0",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "jsdom": "^25.0.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  }
+}

@@ -1,0 +1,9 @@
+-- p0002_usage_upsert.sql (scaffold, Postgres only, not applied by store-sqlite)
+--
+-- See p0001_audit_partitions.sql for why this directory exists and why the
+-- SQLite runner never touches it.
+--
+-- Would switch usage_counters increments to
+-- INSERT ... ON CONFLICT DO UPDATE SET value = usage_counters.value + EXCLUDED.value,
+-- a genuine atomic increment, replacing the read-modify-write upsert path
+-- store-sqlite's single writer lock makes safe without it.

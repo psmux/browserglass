@@ -1,0 +1,28 @@
+{
+  "$schema": "https://unpkg.com/@changesets/config/schema.json",
+  "changelog": ["@changesets/changelog-github", { "repo": "psmux/browserglass" }],
+  "commit": false,
+  "access": "public",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "fixed": [
+    [
+      "@browserglass/protocol",
+      "@browserglass/core",
+      "@browserglass/router",
+      "@browserglass/server",
+      "@browserglass/client",
+      "@browserglass/react"
+    ]
+  ],
+  "linked": [
+    [
+      "@browserglass/runtime-host",
+      "@browserglass/runtime-docker",
+      "@browserglass/runtime-remote",
+      "@browserglass/runtime-k8s"
+    ],
+    ["@browserglass/store-sqlite", "@browserglass/store-postgres"]
+  ],
+  "ignore": ["@browserglass/conformance"]
+}

@@ -1,0 +1,23 @@
+{
+  "mode": "pre",
+  "tag": "alpha",
+  "initialVersions": {
+    "@browserglass/automation": "0.1.0-alpha.0",
+    "@browserglass/cli": "0.1.0-alpha.0",
+    "@browserglass/client": "0.1.0-alpha.0",
+    "@browserglass/conformance": "0.1.0-alpha.0",
+    "@browserglass/core": "0.1.0-alpha.0",
+    "@browserglass/embed": "0.1.0-alpha.0",
+    "@browserglass/protocol": "0.1.0-alpha.0",
+    "@browserglass/react": "0.1.0-alpha.0",
+    "@browserglass/router": "0.1.0-alpha.0",
+    "@browserglass/runtime-docker": "0.1.0-alpha.0",
+    "@browserglass/runtime-host": "0.1.0-alpha.0",
+    "@browserglass/runtime-k8s": "0.1.0-alpha.0",
+    "@browserglass/runtime-remote": "0.1.0-alpha.0",
+    "@browserglass/server": "0.1.0-alpha.0",
+    "@browserglass/store-postgres": "0.1.0-alpha.0",
+    "@browserglass/store-sqlite": "0.1.0-alpha.0"
+  },
+  "changesets": []
+}

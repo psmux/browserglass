@@ -1,0 +1,10 @@
+-- p0001_audit_partitions.sql (scaffold, Postgres only, not applied by store-sqlite)
+--
+-- Postgres-only migrations live in pg-only/, prefixed pNNNN_, and the
+-- SQLite migration runner skips this directory entirely. Kept here as a
+-- comment scaffold describing what a Postgres store could apply; nothing
+-- runs these files.
+--
+-- Would declaratively partition audit_events by month on occurred_at, so
+-- that retention becomes DROP TABLE audit_events_2026_05 (instant) instead
+-- of a batched DELETE.

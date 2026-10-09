@@ -1,0 +1,8 @@
+-- p0003_jsonb_columns.sql (scaffold, Postgres only, not applied by store-sqlite)
+--
+-- See p0001_audit_partitions.sql for why this directory exists and why the
+-- SQLite runner never touches it.
+--
+-- Would convert selected plain TEXT JSON columns to jsonb with GIN indexes
+-- where queried: nodes.labels (placement selectors) and audit_events.detail
+-- (investigation).

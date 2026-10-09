@@ -1,0 +1,76 @@
+name: publish
+
+# Publishes the BrowserGlass packages to npm.
+#
+# Two things are load bearing here and must not be changed casually:
+#
+#   1. Publishing goes through `pnpm publish`, never `npm publish`. Sibling
+#      dependencies are declared with pnpm's `workspace:^` protocol and only
+#      pnpm rewrites that to a real semver range when it builds the tarball.
+#      Each package also carries a `prepublishOnly` guard that refuses to run
+#      under any other package manager, so this is belt and braces.
+#   2. The dist-tag is `alpha`, set per package in `publishConfig.tag`. Nothing
+#      here reaches the `latest` tag, so `npm install @browserglass/server`
+#      keeps returning "no matching version" until someone deliberately leaves
+#      changesets pre mode and changes that tag.
+#
+# The whole verification suite runs before the first tarball is built. A tag
+# that fails typecheck, build, the dependency gate, publint, or the tests does
+# not publish anything.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Pack and validate only, do not publish"
+        type: boolean
+        default: true
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  BGLS_TELEMETRY: "false"
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # npm provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: verify
+        run: |
+          pnpm run typecheck
+          pnpm run build
+          pnpm run check:deps
+          pnpm run check:exports
+          pnpm run check:size
+          pnpm run test
+
+      - name: lint published manifests
+        run: pnpm -r --filter "!@browserglass/conformance" exec publint
+
+      - name: confirm no workspace protocol survives packing
+        run: node scripts/check-packed-manifests.mjs
+
+      - name: publish to npm
+        if: github.event_name == 'push' || inputs.dry_run == false
+        run: pnpm -r publish --access public --no-git-checks --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

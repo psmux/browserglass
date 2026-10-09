@@ -1,0 +1,79 @@
+{
+  "name": "@browserglass/conformance",
+  "version": "0.1.0-alpha.0",
+  "description": "Protocol golden vectors, the Store contract suite, and the end to end assertions the demo must satisfy.",
+  "keywords": [
+    "browserglass",
+    "browser",
+    "chrome",
+    "cdp",
+    "remote-browser",
+    "conformance",
+    "testing",
+    "golden-vectors"
+  ],
+  "homepage": "https://github.com/psmux/browserglass/tree/main/packages/conformance#readme",
+  "bugs": {
+    "url": "https://github.com/psmux/browserglass/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/psmux/browserglass.git",
+    "directory": "packages/conformance"
+  },
+  "license": "Apache-2.0",
+  "author": "Godwin Josh",
+  "type": "module",
+  "sideEffects": false,
+  "engines": {
+    "node": ">=22"
+  },
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE"],
+  "browserglass": {
+    "layer": null
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "generate:schema": "node scripts/generate-wire-schema.mjs"
+  },
+  "dependencies": {
+    "@browserglass/client": "workspace:^",
+    "@browserglass/protocol": "workspace:^"
+  },
+  "peerDependencies": {
+    "vitest": "^2.1.8"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@browserglass/automation": "workspace:^",
+    "@browserglass/router": "workspace:^",
+    "@browserglass/runtime-host": "workspace:^",
+    "@browserglass/server": "workspace:^",
+    "@browserglass/store-postgres": "workspace:^",
+    "@browserglass/store-sqlite": "workspace:^",
+    "@types/node": "^22.10.7",
+    "@types/ws": "^8.5.13",
+    "ajv": "^8.20.0",
+    "jsdom": "^25.0.1",
+    "ts-json-schema-generator": "^2.9.0",
+    "vitest": "^2.1.8",
+    "ws": "^8.21.3",
+    "better-sqlite3": "^11.8.1"
+  },
+  "private": true
+}
