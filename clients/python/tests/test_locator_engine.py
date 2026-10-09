@@ -286,6 +286,34 @@ async def test_wait_for_role_requeries_when_a_slice_times_out():
     assert rt.wait_calls[0]["deadlineMs"] <= 1000
 
 
+@pytest.mark.asyncio
+async def test_wait_for_keeps_waiting_through_a_navigation():
+    rt = FakeRuntime()
+    rt.wait_errors.extend([
+        AutomationError("PROTOCOL_ERROR", "Inspected target navigated or closed"),
+        RuntimeError("Execution context was destroyed."),
+    ])
+    rt.wait_replies.append(wait_success([make_match()]))
+    engine = LocatorEngine(rt)
+
+    result = await engine.wait_for("t1", "#flash", {"timeout_ms": 5000})
+    assert result.total == 1
+    assert len(rt.wait_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_wait_for_does_not_retry_an_error_that_is_not_a_navigation():
+    rt = FakeRuntime()
+    rt.wait_errors.append(AutomationError("TARGET_CLOSED", "Inspected target navigated or closed"))
+    engine = LocatorEngine(rt)
+    with pytest.raises(AutomationError) as excinfo:
+        await engine.wait_for("t1", "#flash", {"timeout_ms": 5000})
+    assert excinfo.value.code == "TARGET_CLOSED"
+    rt.wait_errors.append(RuntimeError("boom"))
+    with pytest.raises(RuntimeError):
+        await engine.wait_for("t1", "#flash", {"timeout_ms": 5000})
+
+
 def test_parse_role_value_accepts_bare_role():
     filt = parse_role_value("button", "role=button")
     assert filt.role == "button"

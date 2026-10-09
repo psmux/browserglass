@@ -58,6 +58,29 @@ const WAIT_EVALUATE_MARGIN_MS = 2000;
  */
 const ROLE_REQUERY_MS = 1000;
 
+/**
+ * Whether `err` is the page changing under a query rather than an answer
+ * about it: a navigation replaced the document, or the execution context the
+ * evaluate ran in was torn down. A wait keeps polling through these; every
+ * other error still ends it.
+ */
+export function isTransientNavigationError(err: unknown): boolean {
+  if (err instanceof AutomationError) {
+    if (
+      err.code === 'TARGET_CLOSED' ||
+      err.code === 'INSTANCE_GONE' ||
+      err.code === 'LEASE_REVOKED' ||
+      err.code === 'POLICY_DENIED' ||
+      err.code === 'INVALID_ARGUMENT'
+    )
+      return false;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return /Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id|Cannot find default execution context|Could not find node with given id|No frame with given id|frame (was )?detached/i.test(
+    message,
+  );
+}
+
 /** Whether a `role=` segment sits before the first `frame=` segment, i.e. one this hop resolves itself. */
 function selectorHasLiveRole(segments: SelectorSegment[]): boolean {
   for (const seg of segments) {
@@ -807,7 +830,18 @@ export class LocatorEngine {
       const deadlineMs = Math.max(0, overallDeadline - Date.now());
       const outOfTime = deadlineMs <= 0 || round >= maxRounds;
 
-      const effective = await this.prepareSelector(targetId, selector, segments, deadlineMs);
+      let effective: string | null;
+      try {
+        effective = await this.prepareSelector(targetId, selector, segments, deadlineMs);
+      } catch (err) {
+        // A navigation landing mid-query is not an answer about the page,
+        // it is the page changing under the question. Ask again.
+        if (!outOfTime && isTransientNavigationError(err)) {
+          await this.rt.sleep(Math.min(pollMs, deadlineMs));
+          continue;
+        }
+        throw err;
+      }
 
       if (effective === null) {
         // A `role=` segment matched nothing. `detached` and `hidden` are
@@ -856,28 +890,41 @@ export class LocatorEngine {
         opts?.stamp === false ? null : this.buildResolveSpec(effective, { ...opts, stamp: true });
 
       const sliceDeadlineMs = Math.min(deadlineMs, sliceMs);
-      const wire = await this.rt.evaluateFunction<WireWaitResult>(
-        targetId,
-        WAIT_SCRIPT,
-        // `index` goes to the page, not just to the client, and it changes
-        // what the wait is waiting FOR. Without it the wait is satisfied the
-        // moment ANY match is actionable, so a caller who named index 0
-        // would be released by index 1 becoming ready and would then have to
-        // fail on its own element. Waiting for the right one is both more
-        // correct and, on a page that renders its fields in order, faster.
-        [
-          {
-            check,
-            stamp: stampSpec,
-            state,
-            deadlineMs: sliceDeadlineMs,
-            pollMs,
-            index: opts?.index ?? null,
-          },
-        ],
-        sliceDeadlineMs + WAIT_EVALUATE_MARGIN_MS,
-        ENGINE_WORLD,
-      );
+      let wire: WireWaitResult;
+      try {
+        wire = await this.rt.evaluateFunction<WireWaitResult>(
+          targetId,
+          WAIT_SCRIPT,
+          // `index` goes to the page, not just to the client, and it changes
+          // what the wait is waiting FOR. Without it the wait is satisfied the
+          // moment ANY match is actionable, so a caller who named index 0
+          // would be released by index 1 becoming ready and would then have to
+          // fail on its own element. Waiting for the right one is both more
+          // correct and, on a page that renders its fields in order, faster.
+          [
+            {
+              check,
+              stamp: stampSpec,
+              state,
+              deadlineMs: sliceDeadlineMs,
+              pollMs,
+              index: opts?.index ?? null,
+            },
+          ],
+          sliceDeadlineMs + WAIT_EVALUATE_MARGIN_MS,
+          ENGINE_WORLD,
+        );
+      } catch (err) {
+        // "Inspected target navigated or closed" and friends: the document
+        // the wait was running in went away, which is exactly what a wait
+        // straight after a click that submits a form has to sit through.
+        // The deadline is the caller's, so keep polling the new document.
+        if (!outOfTime && Date.now() < overallDeadline && isTransientNavigationError(err)) {
+          await this.rt.sleep(Math.min(pollMs, Math.max(0, overallDeadline - Date.now())));
+          continue;
+        }
+        throw err;
+      }
 
       if (wire.failed === true) {
         throw new AutomationError(

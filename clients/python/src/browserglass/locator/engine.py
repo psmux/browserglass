@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 import string
 import time
 from dataclasses import replace
@@ -65,6 +66,25 @@ DEFAULT_ACT_TIMEOUT_MS = 8000
 # How long one in-page wait slice runs when the selector has a ``role=``
 # segment, before the accessibility query is repeated. See ``wait_for``.
 ROLE_REQUERY_MS = 1000
+
+_TRANSIENT_NAVIGATION = re.compile(
+    r"Inspected target navigated or closed|Execution context was destroyed|Cannot find context with specified id"
+    r"|Cannot find default execution context|Could not find node with given id|No frame with given id|frame (was )?detached",
+    re.IGNORECASE,
+)
+
+
+def is_transient_navigation_error(err: BaseException) -> bool:
+    """Whether ``err`` is the page changing under a query (a navigation
+    replaced the document, or the execution context went away) rather than
+    an answer about it. A wait keeps polling through these and nothing
+    else. Mirrors ``isTransientNavigationError`` in engine.ts."""
+    if isinstance(err, AutomationError) and err.code in (
+        "TARGET_CLOSED", "INSTANCE_GONE", "LEASE_REVOKED", "POLICY_DENIED", "INVALID_ARGUMENT",
+    ):
+        return False
+    message = err.message if isinstance(err, AutomationError) else str(err)
+    return bool(_TRANSIENT_NAVIGATION.search(message))
 
 # The world every one of this engine's own six fixed scripts runs in.
 #
@@ -385,7 +405,13 @@ class LocatorEngine:
             out_of_time = deadline_ms <= 0 or round_no >= max_rounds
             round_no += 1
 
-            effective = await self._prepare_selector(target_id, selector, segments, deadline_ms)
+            try:
+                effective = await self._prepare_selector(target_id, selector, segments, deadline_ms)
+            except Exception as err:
+                if not out_of_time and is_transient_navigation_error(err):
+                    await self._rt.sleep(min(poll_ms, deadline_ms))
+                    continue
+                raise
 
             if effective is None:
                 # A ``role=`` segment matched nothing. ``detached`` and
@@ -421,22 +447,31 @@ class LocatorEngine:
             stamp_spec = None if opts.get("stamp") is False else self._build_resolve_spec(effective, {**opts, "stamp": True})
 
             slice_deadline_ms = min(deadline_ms, slice_ms)
-            wire = await self._rt.evaluate_function(
-                target_id,
-                WAIT_SCRIPT,
-                [
-                    {
-                        "check": check,
-                        "stamp": stamp_spec,
-                        "state": state,
-                        "deadlineMs": slice_deadline_ms,
-                        "pollMs": poll_ms,
-                        "index": opts.get("index"),
-                    }
-                ],
-                slice_deadline_ms + WAIT_EVALUATE_MARGIN_MS,
-                world=ENGINE_WORLD,
-            )
+            try:
+                wire = await self._rt.evaluate_function(
+                    target_id,
+                    WAIT_SCRIPT,
+                    [
+                        {
+                            "check": check,
+                            "stamp": stamp_spec,
+                            "state": state,
+                            "deadlineMs": slice_deadline_ms,
+                            "pollMs": poll_ms,
+                            "index": opts.get("index"),
+                        }
+                    ],
+                    slice_deadline_ms + WAIT_EVALUATE_MARGIN_MS,
+                    world=ENGINE_WORLD,
+                )
+            except Exception as err:
+                # The document the wait ran in went away (a click that
+                # submitted a form, say). The deadline is the caller's, so
+                # keep polling the new document.
+                if not out_of_time and time.time() * 1000 < overall_deadline and is_transient_navigation_error(err):
+                    await self._rt.sleep(min(poll_ms, max(0.0, overall_deadline - time.time() * 1000)))
+                    continue
+                raise
 
             if wire.get("failed") is True:
                 raise AutomationError(

@@ -579,6 +579,32 @@ describe('role= on top of resolve/waitFor', () => {
     expect(rt.lastSpec(WAIT_SCRIPT)['deadlineMs']).toBeLessThanOrEqual(1000);
   });
 
+  it('keeps waiting through a navigation that tears down the evaluate', async () => {
+    const { engine, rt } = engineWith();
+    rt.waitErrors = [
+      new AutomationError('PROTOCOL_ERROR', 'Inspected target navigated or closed'),
+      new Error('Execution context was destroyed.'),
+    ];
+    rt.waitReplies = [
+      { timedOut: false, result: wireResult([wireMatch()]), waitedMs: 5, checks: 1, wakes: 0 },
+    ];
+
+    const r = await engine.waitFor('t1', '#flash', { timeoutMs: 5000 });
+
+    expect(r.total).toBe(1);
+    expect(rt.count(WAIT_SCRIPT)).toBe(3);
+  });
+
+  it('does not retry an error that is not a navigation', async () => {
+    const { engine, rt } = engineWith();
+    rt.waitErrors = [new AutomationError('TARGET_CLOSED', 'Inspected target navigated or closed')];
+    await expect(engine.waitFor('t1', '#flash', { timeoutMs: 5000 })).rejects.toMatchObject({
+      code: 'TARGET_CLOSED',
+    });
+    rt.waitErrors = [new Error('boom')];
+    await expect(engine.waitFor('t1', '#flash', { timeoutMs: 5000 })).rejects.toThrow('boom');
+  });
+
   it("waitFor(state: 'visible') times out immediately when role= matches nothing, without spending the deadline", async () => {
     const { engine, rt } = engineWith();
     rt.roleReplies = [{ attr: null }];
