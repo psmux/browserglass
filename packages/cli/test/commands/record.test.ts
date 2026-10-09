@@ -1,12 +1,14 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { MsgType, PayloadCodec, encodeBinaryHeader } from '@browserglass/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   recordExportCommand,
   recordListCommand,
   recordReplayCommand,
   recordStartCommand,
+  imageBytesOf,
   recordStopCommand,
   runRecordExport,
 } from '../../src/commands/record.js';
@@ -741,5 +743,30 @@ describe('bgls record replay', () => {
     expect(process.exitCode).toBe(EXIT_CODES.operationalFailure);
     expect(io.stderr.join('')).toContain('not implemented in this build');
     expect(io.stderr.join('')).toContain('bgls record export');
+  });
+});
+
+describe('imageBytesOf: exported frames are standalone images', () => {
+  const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xdb, 1, 2, 3, 0xff, 0xd9]);
+
+  it('strips the 20 byte wire header the recorder stores in front of each frame', () => {
+    const header = encodeBinaryHeader({
+      version: 1,
+      msgType: MsgType.FRAME,
+      streamId: 1,
+      seq: 3,
+      tsDeltaMs: 1011,
+      payloadCodec: PayloadCodec.JPEG,
+      flags: 0,
+      gen16: 1,
+    });
+    const stored = new Uint8Array(header.length + jpeg.length);
+    stored.set(header, 0);
+    stored.set(jpeg, header.length);
+    expect([...imageBytesOf(stored)]).toEqual([...jpeg]);
+  });
+
+  it('passes bytes without the wire magic through unchanged', () => {
+    expect(imageBytesOf(jpeg)).toBe(jpeg);
   });
 });
