@@ -287,6 +287,7 @@ describe('the automation MCP server', () => {
         'bg_stop',
         'bg_press_key',
         'bg_scroll',
+        'bg_drag',
         'bg_wait_for_navigation',
         'bg_tabs',
         'bg_screenshot',
@@ -328,6 +329,15 @@ describe('the automation MCP server', () => {
       bg_read_page: { targetId: 'tgt_1' },
       bg_click: { x: 1, y: 2, button: 'left', clickCount: 1, modifiers: ['Shift'] },
       bg_type: { text: 'hi', humanLike: true },
+      bg_drag: {
+        fromX: 10,
+        fromY: 20,
+        toSelector: '#drop',
+        steps: 5,
+        delayMs: 0,
+        button: 'left',
+        modifiers: ['Shift'],
+      },
       bg_set_input_files: {
         selector: '#attachment',
         paths: ['C:/tmp/report.pdf'],
@@ -1436,6 +1446,49 @@ describe('the automation MCP server', () => {
         .sentJsonMessages()
         .some((m) => m['t'] === 'input.mouse' && m['kind'] === 'wheel' && m['dy'] === 100),
     ).toBe(true);
+
+    client.close();
+  });
+
+  it('bg_drag requires a held lease, then presses, moves with the button held, and releases', async () => {
+    const { client, gateway } = await connectFakeClient();
+    const state = createMcpStateForTest({ client });
+
+    const noLease = await callAutomationTool(state, 'bg_drag', {
+      fromX: 10,
+      fromY: 10,
+      toX: 50,
+      toY: 10,
+    });
+    expect(noLease.isError).toBe(true);
+    expect(trailerOf(noLease.content[0]?.text ?? '')['code']).toBe('LEASE_NOT_HELD');
+
+    const missingEnd = await callAutomationTool(state, 'bg_drag', { fromX: 10, fromY: 10 });
+    expect(missingEnd.isError).toBe(true);
+
+    const acquirePromise = callAutomationTool(state, 'bg_control', {
+      action: 'acquire',
+      waitMs: 5000,
+    });
+    await tick();
+    await acquirePromise;
+
+    const dragPromise = callAutomationTool(state, 'bg_drag', {
+      fromX: 10,
+      fromY: 10,
+      toX: 50,
+      toY: 10,
+      steps: 2,
+      delayMs: 0,
+    });
+    for (let i = 0; i < 10; i++) await tick(10);
+    const dragResult = await dragPromise;
+    expect(dragResult.isError).toBeFalsy();
+    const kinds = gateway.ws
+      .sentJsonMessages()
+      .filter((m) => m['t'] === 'input.mouse')
+      .map((m) => `${m['kind']}:${m['x']}:${m['buttons']}`);
+    expect(kinds).toEqual(['move:10:0', 'down:10:1', 'move:30:1', 'move:50:1', 'up:50:0']);
 
     client.close();
   });

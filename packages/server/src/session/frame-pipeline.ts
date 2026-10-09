@@ -157,7 +157,7 @@ export function frameOutAttachments(
       framed = buildFramedBuffer(att.streamId, ctx, tier.payload);
       framedByKey.set(key, framed);
     }
-    att.transport.send(framed);
+    att.transport.send(framed, ctx.seq);
     att.onSent(ctx.seq, framed.byteLength);
     sent += 1;
   }

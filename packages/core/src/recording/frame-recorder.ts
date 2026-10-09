@@ -53,26 +53,35 @@
  *
  * ## Where `seq`/`gen`/`sidEpoch`/`tsDeltaMs` come from
  *
- * `fanOut()`'s hot loop calls `att.transport.send(tier.buffer)` with only
- * the encoded bytes and no frame metadata, by design (`AttachmentTransport`
- * is deliberately minimal, see `../stream/types.ts`). This class does not
- * change that signature. Instead, it is constructed with a reference to
- * the owning `Stream` and reads `stream.seq`, `stream.gen`, `stream.sidEpoch`,
- * and `stream.tsDeltaMs(nowWallMs)` directly inside `send()`. This is
- * correct under one documented invariant this module relies on but cannot
- * itself verify: `fanOut()` is always called synchronously, with no
- * `await` between the moment a frame's `seq`/`gen`/`tsDeltaMs` were
- * derived from that same `Stream` (via `Stream.nextSeq()` and its `gen`/
- * `sidEpoch` fields) and the `fanOut()` call that reaches this transport's
- * `send()`. Every real call site in this codebase holds that invariant
- * (it is the same assumption `Stream.nextSeq()`'s own doc makes); a caller
- * that violates it (an `await` inserted between assigning a frame's `seq`
- * and fanning it out) would record a `seq`/`gen` newer than the bytes
- * actually being written. Reading from `Stream` instead of decoding the
- * wire header is still strictly more correct than the alternative: `gen`
- * only travels on the wire truncated to its low 16 bits (`../stream/types.ts`'s
- * `SequencedFrame.gen` doc), which this module needs full width for
- * exactly the reason given in `./types.ts`'s `RecordedFrameEntry` doc.
+ * `seq` comes from the fan-out itself: `fanOut()` and the server's
+ * `frameOutAttachments()` pass the frame's own seq as `send()`'s second
+ * argument, the same value they hand `Attachment.onSent()` right after.
+ * An earlier version read `stream.seq` here instead, on the assumption
+ * that nothing awaits between a frame getting its seq and being fanned
+ * out. The server breaks that assumption: seqs are assigned when Chrome
+ * delivers a frame, and the encode runs later on a per-target chain, so
+ * on a busy page `stream.seq` had already moved two or three frames ahead
+ * by the time this ran. The recorder then acked a seq it had not been
+ * sent yet, the real entry for that later frame was never drained (its
+ * ack arrived at or below `lastAckedSeq` and was ignored), and after
+ * `maxBacklog` such leaks the attachment's backlog stayed full for good:
+ * the recording quietly stopped writing while still reporting
+ * `failed: false`. `stream.seq` is kept only as a fallback for a caller
+ * that does not pass a seq.
+ *
+ * `gen`, `sidEpoch` and `tsDeltaMs` are still read off `Stream` at write
+ * time. `gen` only travels on the wire truncated to its low 16 bits
+ * (`../stream/types.ts`'s `SequencedFrame.gen` doc), and this module needs
+ * full width for the reason given in `./types.ts`'s `RecordedFrameEntry`
+ * doc; it changes on navigation, not per frame, so reading it a frame
+ * late is harmless.
+ *
+ * As a second line of defence, when every write this recorder started
+ * has finished and the attachment still shows a backlog, the backlog is
+ * a bookkeeping leak by definition (nothing is in flight), and it is
+ * cleared. A recorder can therefore fall
+ * behind under load, and say so in {@link FrameRecorder.framesDropped},
+ * but it cannot stop for good while its sink is healthy.
  *
  * ## Degradation on failure
  *
@@ -144,6 +153,7 @@ export class FrameRecorder {
   private readonly onErrorCb: ((err: Error) => void) | undefined;
 
   private frameIndex = 0;
+  private pendingWrites = 0;
   private _failed = false;
   private _lastError: Error | undefined;
   private metaWritten = false;
@@ -163,7 +173,7 @@ export class FrameRecorder {
       // own backlog/ack window (see `handleSend`'s `onAck` call), which is
       // what `maxBacklog` on the constructor options actually governs.
       bufferedAmount: () => 0,
-      send: (buf: Uint8Array) => this.handleSend(buf),
+      send: (buf: Uint8Array, seq?: number) => this.handleSend(buf, seq),
     };
 
     this.attachment = new Attachment({
@@ -201,6 +211,16 @@ export class FrameRecorder {
     return this.frameIndex;
   }
 
+  /**
+   * Frames the fan-out skipped for this recorder because its backlog was
+   * full (the sink was slower than the stream). Zero on a healthy
+   * recording; a large number next to a small {@link framesWritten} means
+   * the recording has gaps, which is worth telling the caller about.
+   */
+  get framesDropped(): number {
+    return this.attachment.backpressureDropCount;
+  }
+
   private writeMetaOnce(meta: RecordingMeta): void {
     if (this.metaWritten || !this.sink.writeMeta) {
       return;
@@ -213,18 +233,17 @@ export class FrameRecorder {
 
   /**
    * `AttachmentTransport.send`: called by `fanOut()` once per frame this
-   * recorder is eligible for. Reads this frame's `seq`/`gen`/`sidEpoch`/
-   * `tsDeltaMs` off `this.stream` (see the module doc's invariant note),
-   * hands the entry and `buf` to the sink, and on success acks the
-   * attachment's own backlog so a healthy recording never trips its
-   * `maxBacklog` cap. A failure degrades the recording; it never throws
-   * back into `fanOut()`'s caller.
+   * recorder is eligible for, with that frame's own `seq` (see the module
+   * doc for why `stream.seq` is only a fallback). Hands the entry and
+   * `buf` to the sink, and on success acks exactly that seq, so a healthy
+   * recording never trips its `maxBacklog` cap. A failure degrades the
+   * recording; it never throws back into `fanOut()`'s caller.
    */
-  private handleSend(buf: Uint8Array): void {
+  private handleSend(buf: Uint8Array, frameSeq?: number): void {
     if (this._failed) {
       return;
     }
-    const seq = this.stream.seq;
+    const seq = frameSeq ?? this.stream.seq;
     const nowWallMs = this.clock.wallNow();
     this.frameIndex += 1;
     const entry: RecordedFrameEntry = {
@@ -237,14 +256,26 @@ export class FrameRecorder {
       writtenAtMs: nowWallMs,
     };
 
+    this.pendingWrites += 1;
     Promise.resolve()
       .then(() => this.sink.writeFrame(entry, buf))
       .then(() => {
-        if (!this._failed) {
-          this.attachment.onAck(seq);
+        this.pendingWrites -= 1;
+        if (this._failed) return;
+        this.attachment.onAck(seq);
+        // Nothing in flight but a backlog left over is a leak, never real
+        // backpressure; see the module doc's last paragraph on `seq`.
+        // `onAck` cannot clear it (a leaked entry sits at or below
+        // `lastAckedSeq`, which `onAck` ignores), so it is dropped here.
+        if (this.pendingWrites === 0 && this.attachment.backlog > 0) {
+          this.attachment.sentAtBySeq.clear();
+          this.attachment.backlog = 0;
         }
       })
-      .catch((err: unknown) => this.fail(err));
+      .catch((err: unknown) => {
+        this.pendingWrites -= 1;
+        this.fail(err);
+      });
   }
 
   private fail(err: unknown): void {

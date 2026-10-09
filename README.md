@@ -51,7 +51,7 @@ More about each run, with its output: [`docs/showcase.md`](docs/showcase.md).
 | See the page like an agent | `pageMap()` returns every element you can act on, numbered, with its box on screen and whether something covers it. One call instead of guessing selectors. |
 | Stream it live | Any tab, streamed into your web page through a React component, a `<browser-glass>` tag, or a plain JS client. Many people can watch one tab. |
 | Hand control back and forth | Every tab has a control lease. A script, an agent, or a person holds it. People outrank agents by default, and the agent gets told when someone takes over. |
-| Give an AI agent a browser | `bgls mcp` exposes 40 tools over MCP, for Claude Code, Claude Desktop and any other MCP host. |
+| Give an AI agent a browser | `bgls mcp` exposes 41 tools over MCP, for Claude Code, Claude Desktop and any other MCP host. |
 | Run many at once | `BrowserSwarm` opens ten or a hundred browsers and runs one function on all of them in parallel. |
 | Keep logins | Persistent profiles keep cookies and storage between runs. |
 | Control the network | Pause, inspect, block or allow requests before they leave the browser. |

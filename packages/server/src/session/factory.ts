@@ -185,6 +185,77 @@ function resolveClientHintsHook(spec: BrowserSpec): StealthProfileHooks | null {
 }
 
 /**
+ * The viewport {@link resolveViewportHook} forces on every page, or `null`
+ * when it forces none. Shared with `ManagedSession`, which reads it back as
+ * the page's real viewport.
+ */
+export function emulatedViewportFor(
+  spec: BrowserSpec,
+  runtimeKind: string | undefined,
+): { width: number; height: number; deviceScaleFactor: number } | null {
+  if (
+    runtimeKind === 'remote' &&
+    (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.[
+      'BGLS_REMOTE_NO_EMULATION'
+    ] === '1'
+  ) {
+    return null;
+  }
+  // `viewport` is required on a real `BrowserSpec`; a hand built spec in a
+  // test or an older stored row may still lack it, and that must not stop
+  // the instance from attaching.
+  const viewport = spec.viewport as BrowserSpec['viewport'] | undefined;
+  if (!viewport || !(viewport.width > 0) || !(viewport.height > 0)) return null;
+  return {
+    width: viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: viewport.deviceScaleFactor > 0 ? viewport.deviceScaleFactor : 1,
+  };
+}
+
+/**
+ * Makes every page's viewport exactly `spec.viewport`. Without it a host
+ * launched headless Chrome sized its page from `--window-size`
+ * (`runtime-host/src/flags.ts`), which sets the OUTER window, browser
+ * chrome included: `viewport: { width: 1280, height: 860 }` came out as a
+ * 1280x718 page, and `deviceScaleFactor` was ignored altogether.
+ *
+ * Same `Emulation.setDeviceMetricsOverride` call `runtime-remote`'s
+ * `applyResolvedSpec` (`spec-apply.ts`) already sends once at attach, sent
+ * here per page target instead, through the same `onTargetAttached` slot
+ * the client hints hook uses, so a tab or window opened later gets it too
+ * and so does a fresh session after a cross origin navigation (`Emulation`
+ * is session scoped). Skipped for an out of process iframe, which would be
+ * resized rather than the page. For a `remote` instance it honours the
+ * same `BGLS_REMOTE_NO_EMULATION=1` opt out `spec-apply.ts` does, since
+ * there the override is visible to a person at that real screen.
+ *
+ * Screencast frames follow the emulated size (Chrome renders the page at
+ * the overridden metrics and the screencast reads that surface), which is
+ * what the stream's own viewport math already assumes.
+ */
+export function resolveViewportHook(
+  spec: BrowserSpec,
+  runtimeKind: string | undefined,
+): StealthProfileHooks | null {
+  const viewport = emulatedViewportFor(spec, runtimeKind);
+  if (!viewport) return null;
+  const { width, height, deviceScaleFactor } = viewport;
+  return {
+    initScripts: [],
+    onTargetAttached: async (ctx) => {
+      if (ctx.targetType === 'iframe') return;
+      await ctx.send('Emulation.setDeviceMetricsOverride', {
+        width,
+        height,
+        deviceScaleFactor,
+        mobile: false,
+      });
+    },
+  };
+}
+
+/**
  * Closes the gap `packages/runtime-host/src/runtime.ts`'s
  * `proxyAuthPerInstance: false` note names precisely: `BrowserSpec.proxy.username`/
  * `.password` (`@browserglass/protocol`'s `entities.ts`) reach this
@@ -421,7 +492,10 @@ export function createManagedSessionFactory(
       bridge,
       view.instance.spec.initScripts,
       composeTargetAttachedHooks(
-        resolveClientHintsHook(view.instance.spec),
+        composeTargetAttachedHooks(
+          resolveViewportHook(view.instance.spec, view.instance.runtime?.kind),
+          resolveClientHintsHook(view.instance.spec),
+        ),
         resolveStealthHooks(
           view.instance.runtime?.stealthProfile,
           view.instance.spec,
@@ -470,6 +544,7 @@ export function createManagedSessionFactory(
       await hooks.dispatch('onSessionStarted', startedEvent);
     }
 
+    const emulated = emulatedViewportFor(view.instance.spec, view.instance.runtime?.kind);
     return new ManagedSession({
       instanceId,
       sessionId,
@@ -489,6 +564,9 @@ export function createManagedSessionFactory(
       // reintroduce that fingerprint identically regardless of which level
       // was requested.
       stealthActive: view.instance.spec.stealth !== 'off',
+      // The size `resolveViewportHook` forces on every page, so the session
+      // reads the exact viewport back instead of a scrollbar-less estimate.
+      ...(emulated ? { emulatedViewport: { width: emulated.width, height: emulated.height } } : {}),
       // Wires `SessionRegistry.evict(instanceId)` (`ctx.onIdle`, set by
       // `getOrCreate`, `registry.ts`) to fire the moment this session's
       // last viewer disconnects (`ManagedSession`'s own `onIdle` option,
@@ -603,7 +681,10 @@ function buildRestartInstanceExecutor(
         bridge,
         view.instance.spec.initScripts,
         composeTargetAttachedHooks(
-          resolveClientHintsHook(view.instance.spec),
+          composeTargetAttachedHooks(
+            resolveViewportHook(view.instance.spec, view.instance.runtime?.kind),
+            resolveClientHintsHook(view.instance.spec),
+          ),
           resolveStealthHooks(
             view.instance.runtime?.stealthProfile,
             view.instance.spec,

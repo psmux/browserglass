@@ -71,6 +71,50 @@ describe('REST CORS', () => {
     expect(res.headers.get('access-control-allow-origin')).toBe('https://anywhere.example.com');
   });
 
+  it('a "*" entry inside a list (what bgls serve --cors "*" produces) allows any origin', async () => {
+    const bg = createBrowserGlass({
+      mode: 'gateway',
+      router: { endpoint: 'https://router.example.com' },
+      security: { allowedOrigins: ['*'] },
+    });
+    const res = await bg.fetch(
+      new Request('http://localhost/browserglass/healthz', {
+        headers: { origin: 'https://anywhere.example.com' },
+      }),
+    );
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://anywhere.example.com');
+  });
+
+  it('a list mixing exact origins and "*" still allows any origin', async () => {
+    const bg = createBrowserGlass({
+      mode: 'gateway',
+      router: { endpoint: 'https://router.example.com' },
+      security: { allowedOrigins: ['https://widget.example.com', '*'] },
+    });
+    const res = await bg.fetch(
+      new Request('http://localhost/browserglass/healthz', {
+        headers: { origin: 'https://other.example.com' },
+      }),
+    );
+    expect(res.headers.get('access-control-allow-origin')).toBe('https://other.example.com');
+  });
+
+  it('BGLS_ALLOWED_ORIGINS="*" allows any origin, alone or in a comma list', async () => {
+    for (const value of ['*', 'https://widget.example.com,*']) {
+      const bg = createBrowserGlass({
+        mode: 'gateway',
+        router: { endpoint: 'https://router.example.com' },
+        env: { BGLS_ALLOWED_ORIGINS: value },
+      });
+      const res = await bg.fetch(
+        new Request('http://localhost/browserglass/healthz', {
+          headers: { origin: 'https://anywhere.example.com' },
+        }),
+      );
+      expect(res.headers.get('access-control-allow-origin')).toBe('https://anywhere.example.com');
+    }
+  });
+
   it('corsCredentials: true adds Access-Control-Allow-Credentials for a matched origin', async () => {
     const bg = createBrowserGlass({
       mode: 'gateway',

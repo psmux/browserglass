@@ -320,4 +320,64 @@ describe('FrameRecorder failure degradation', () => {
     }
     expect(recorder.failed).toBe(false);
   });
+
+  it('keeps recording when frames are fanned out after the stream seq has moved on (overlapping encodes)', async () => {
+    // The server assigns a seq when Chrome delivers a frame and encodes on a
+    // queue, so by the time frame N is fanned out `stream.seq` can already
+    // be N+3. A recorder that acked `stream.seq` leaked one backlog entry
+    // per frame here and, after maxBacklog of them, was skipped forever.
+    const clock = new ManualClock(0);
+    const stream = makeStream(clock);
+    const sink = recordingSink();
+    const recorder = new FrameRecorder({
+      streamId: 1,
+      stream,
+      targetId: 'tgt_1' as never,
+      sink,
+      clock,
+      maxBacklog: 3,
+    });
+    stream.addAttachment(recorder.attachment);
+
+    const queued = [1, 2, 3, 4].map(() => frameFromStream(stream, clock));
+    for (const frame of queued) {
+      expect(fanOut([recorder.attachment], frame, tierSet()).sent).toBe(1);
+      await vi.waitFor(() => expect(sink.frames.at(-1)?.entry.seq).toBe(frame.seq));
+    }
+    for (let i = 0; i < 10; i += 1) {
+      const frame = frameFromStream(stream, clock);
+      expect(fanOut([recorder.attachment], frame, tierSet()).sent).toBe(1);
+      await vi.waitFor(() => expect(sink.frames.at(-1)?.entry.seq).toBe(frame.seq));
+    }
+    expect(sink.frames.map((f) => f.entry.seq)).toEqual(
+      Array.from({ length: 14 }, (_, i) => i + 1),
+    );
+    expect(recorder.framesDropped).toBe(0);
+    expect(recorder.failed).toBe(false);
+  });
+
+  it('clears a leaked backlog once nothing is in flight, even when the caller passes no seq', async () => {
+    const clock = new ManualClock(0);
+    const stream = makeStream(clock);
+    const sink = recordingSink();
+    const recorder = new FrameRecorder({
+      streamId: 1,
+      stream,
+      targetId: 'tgt_1' as never,
+      sink,
+      clock,
+      maxBacklog: 3,
+    });
+    // A transport caller that predates the seq argument: send() then
+    // onSent(), with no seq passed, after the stream has run ahead.
+    const att = recorder.attachment;
+    const queued = [1, 2, 3, 4].map(() => frameFromStream(stream, clock));
+    for (const frame of queued) {
+      att.transport.send(new Uint8Array([1]));
+      att.onSent(frame.seq, 1);
+      await vi.waitFor(() => expect(att.backlog).toBe(0));
+    }
+    expect(att.backlog).toBe(0);
+    expect(sink.frames).toHaveLength(4);
+  });
 });

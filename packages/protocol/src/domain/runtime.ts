@@ -474,6 +474,14 @@ export interface StealthProfile {
 export interface StealthTargetContext {
   cdpSessionId: string;
   targetId: string;
+  /**
+   * The CDP target type this hook runs for. A hook that changes page level
+   * emulation (the device metrics override, for one) must skip `'iframe'`:
+   * an out of process iframe has its own session, and overriding its
+   * metrics would resize the frame rather than the page. Optional so a
+   * hand built context in an older test still type checks.
+   */
+  targetType?: 'page' | 'iframe';
   evaluate: (expression: string) => Promise<unknown>;
   /**
    * Sends one CDP command on this target's session and resolves with its

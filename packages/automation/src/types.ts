@@ -315,6 +315,50 @@ export interface ClickAtOptions {
   modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'>;
 }
 
+/** Options for {@link AutomationClient.mouseDown} and {@link AutomationClient.mouseUp}. */
+export interface MouseButtonOptions {
+  /** Default `'left'`. */
+  button?: 'left' | 'right' | 'middle';
+  /** Default 1. Only meaningful on `mouseDown`; a double click is two down/up pairs with clickCount 1 then 2. */
+  clickCount?: number;
+  modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'>;
+}
+
+/** Options for {@link AutomationClient.moveTo}. */
+export interface MoveToOptions {
+  /**
+   * DOM `MouseEvent.buttons` bitmask to report on the move (1 left, 2 right,
+   * 4 middle). Default 0. The gateway tracks the buttons this viewer holds
+   * and reports a move made between `mouseDown` and `mouseUp` as a drag
+   * either way, so this only matters to a page that reads `buttons` off a
+   * move it did not see the press for.
+   */
+  buttons?: number;
+  modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'>;
+}
+
+/** One end of a {@link AutomationClient.drag}: a viewport CSS pixel, or a selector whose first match's centre is used. */
+export type DragPoint = { x: number; y: number } | string;
+
+/** Options for {@link AutomationClient.drag}. */
+export interface DragOptions {
+  /** How many interpolated moves between the press and the release. Default 10, minimum 1. */
+  steps?: number;
+  /** Pause between moves, in ms. Default 16 (about one frame), which canvas apps such as Excalidraw need to see a drag rather than a jump. */
+  delayMs?: number;
+  /** Default `'left'`. */
+  button?: 'left' | 'right' | 'middle';
+  /** Held for the whole drag, e.g. `['Shift']` to constrain a shape. */
+  modifiers?: Array<'Alt' | 'Control' | 'Meta' | 'Shift'>;
+}
+
+/** What {@link AutomationClient.drag} reports: the two points it actually pressed and released at. */
+export interface DragResult {
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  steps: number;
+}
+
 /** Options for {@link AutomationClient.scroll}. */
 export interface ScrollOptions {
   /** CSS px. Point the wheel event is dispatched at; default the viewport centre. */
@@ -469,6 +513,8 @@ export interface StopRecordingResult {
   stoppedAtMs: number;
   /** How many frames actually reached the sink; see `RecordingStopped.framesWritten`'s own doc (attempted, not necessarily all durable if the process crashes mid write). */
   framesWritten: number;
+  /** Frames skipped because the gateway's disk writes fell behind the stream. Zero on a healthy recording. Absent from a gateway that predates the field. */
+  framesDropped?: number;
   /** True if the recording degraded to a no-op before this stop (a sink failure mid recording). `framesWritten` still counts whatever reached disk before that happened. */
   failed: boolean;
 }

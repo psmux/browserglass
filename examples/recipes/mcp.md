@@ -1,6 +1,6 @@
 # BrowserGlass as an MCP server
 
-`bgls mcp` speaks MCP over stdio. It opens one browser when it starts, gives the agent 40 tools (`bg_navigate`, `bg_click`, `bg_fill`, `bg_read_page`, `bg_page_map`, `bg_screenshot`, `bg_pdf`, `bg_swarm_open` and the rest), and opens more browsers when the agent asks for a swarm.
+`bgls mcp` speaks MCP over stdio. It opens one browser when it starts, gives the agent 41 tools (`bg_navigate`, `bg_click`, `bg_fill`, `bg_read_page`, `bg_page_map`, `bg_screenshot`, `bg_pdf`, `bg_swarm_open` and the rest), and opens more browsers when the agent asks for a swarm.
 
 You need a gateway running first, from the repo root:
 
@@ -69,10 +69,10 @@ While the agent works you can watch the same browser live from a page that embed
 
 ## What was checked
 
-An MCP client spawned exactly the command above (with `BGLS_DATA_DIR` and no token), listed 40 tools, and called `bg_control`, `bg_navigate` and `bg_read_page` against news.ycombinator.com:
+An MCP client spawned exactly the command above (with `BGLS_DATA_DIR` and no token), listed 41 tools, and called `bg_control`, `bg_navigate` and `bg_read_page` against news.ycombinator.com:
 
 ```
-tool count: 40
+tool count: 41
 bg_control: Control acquired, expires in 30s.
 bg_navigate: Navigated to https://news.ycombinator.com/.
 bg_read_page: Hacker News new | past | comments | ask | show | jobs | submit login ...

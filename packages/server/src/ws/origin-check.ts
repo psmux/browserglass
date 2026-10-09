@@ -46,6 +46,19 @@ function originHost(origin: string): string | null {
 }
 
 /**
+ * True when `origin` is on `allowedOrigins`. A `'*'` entry anywhere in a
+ * list counts as the wildcard too, not only the bare string: `bgls serve
+ * --cors "*"` arrives here as `['*']`, and before this it matched nothing.
+ * Shared with `rest/cors.ts` so the WS and REST checks cannot drift.
+ */
+export function originOnAllowList(
+  origin: string,
+  allowedOrigins: readonly string[] | '*',
+): boolean {
+  return allowedOrigins === '*' || allowedOrigins.includes('*') || allowedOrigins.includes(origin);
+}
+
+/**
  * Checks `req`'s `Origin` header (if any) against `allowedOrigins`, per
  * this module's own doc comment: no header, or a header matching this
  * request's own `Host`, always passes; a genuinely different origin needs
@@ -65,7 +78,7 @@ export function checkUpgradeOrigin(
     return { allowed: true };
   }
 
-  if (allowedOrigins === '*' || allowedOrigins.includes(origin)) return { allowed: true };
+  if (originOnAllowList(origin, allowedOrigins)) return { allowed: true };
 
   return {
     allowed: false,

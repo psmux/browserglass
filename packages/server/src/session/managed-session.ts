@@ -108,6 +108,8 @@ export interface RecordingSummaryResult {
   readonly startedAtMs: number;
   readonly stoppedAtMs?: number;
   readonly framesWritten: number;
+  /** `FrameRecorder.framesDropped`: frames skipped because the sink was behind. */
+  readonly framesDropped: number;
   readonly failed: boolean;
 }
 
@@ -485,6 +487,14 @@ export interface ManagedSessionOptions {
    * error.
    */
   readonly recordingsDir?: string;
+  /**
+   * The CSS viewport every page of this instance is forced to with
+   * `Emulation.setDeviceMetricsOverride` (`factory.ts`'s
+   * `resolveViewportHook`), when one is. Read back as the page's real
+   * viewport instead of `Page.getLayoutMetrics`, which leaves out a
+   * scrollbar. Omitted when no override is applied.
+   */
+  readonly emulatedViewport?: { readonly width: number; readonly height: number };
 }
 
 /**
@@ -544,6 +554,14 @@ interface TargetTierState {
 
 /** How many recent `buildTierPayloads` durations {@link TargetTierState.encodeMsSamples} retains per target. */
 const ENCODE_SAMPLE_CAP = 64;
+
+/**
+ * How long `startRecording()` waits for the recorder to be handed its first
+ * frame before returning anyway. Long enough for a forced capture on a
+ * loaded machine, short enough that a target that cannot produce a frame
+ * at all only delays `recording.start` by this much.
+ */
+const FIRST_RECORDED_FRAME_WAIT_MS = 2_000;
 
 /**
  * How long {@link ManagedSession.promoteOnInput} refuses to RE-promote a
@@ -887,6 +905,9 @@ export class ManagedSession {
   private readonly downloadDir: string | undefined;
   /** See {@link ManagedSessionOptions.recordingsDir}. */
   private readonly recordingsDir: string | undefined;
+  private readonly emulatedViewport:
+    | { readonly width: number; readonly height: number }
+    | undefined;
   /**
    * Every recording this session has ever started, keyed by `recordingId`,
    * kept after `stopRecording()` (with `stoppedAtMs` set) so
@@ -952,6 +973,7 @@ export class ManagedSession {
     this.downloadStore = opts.downloadStore;
     this.downloadDir = opts.downloadDir;
     this.recordingsDir = opts.recordingsDir;
+    this.emulatedViewport = opts.emulatedViewport;
 
     this.session = new Session({
       id: this.sessionId as never,
@@ -1766,6 +1788,14 @@ export class ManagedSession {
   ): Promise<{ width: number; height: number } | null> {
     try {
       const handle = await this.registry.attach(targetId as never);
+      // Every page of this instance has the spec viewport forced on it
+      // (`factory.ts`'s `resolveViewportHook`), so that size is exact. The
+      // layout metrics below exclude a scrollbar: a 390 wide page with a
+      // vertical scrollbar read as 375, the stream was scaled down to
+      // 376x814 instead of 390x844, and `capture()` reported a 3.12 device
+      // scale factor for a 3x page. The screencast covers the whole
+      // viewport, scrollbar included, which is what this size matches.
+      if (this.emulatedViewport && handle) return { ...this.emulatedViewport };
       const metrics = (await this.bridge.send('Page.getLayoutMetrics', {}, handle.id as never)) as {
         cssLayoutViewport?: { clientWidth: number; clientHeight: number };
         layoutViewport?: { clientWidth: number; clientHeight: number };
@@ -1989,9 +2019,48 @@ export class ManagedSession {
     // A recording started against a static page would otherwise capture
     // nothing until the page next changes (screencast is change-driven);
     // mirrors `subscribe()`'s own identical fix immediately above.
-    await handle.forceFrame().catch(() => false);
+    //
+    // Then wait, bounded, for that frame to get through the encode queue
+    // to this recorder, so frame 1 is on its way to disk by the time the
+    // caller is told the recording has started. Without the wait the
+    // opening of a recording was lost whenever the forced frame failed
+    // (a capture source still starting) or sat behind queued frames: the
+    // first frame then came from the next screencast frame, which on a
+    // quiet page can be seconds away.
+    await this.captureFirstRecordedFrame(state, handle, recorder);
 
     return this.recordingSummary(recordingId);
+  }
+
+  /**
+   * Forces a frame for a just started recording and waits until the
+   * recorder has been handed one, retrying the forced capture while the
+   * target's capture source is still starting. Gives up quietly after
+   * {@link FIRST_RECORDED_FRAME_WAIT_MS}: a slow first frame must not turn
+   * `recording.start` into an error.
+   */
+  private async captureFirstRecordedFrame(
+    state: TargetTierState,
+    handle: { readonly forceFrame: () => Promise<boolean> },
+    recorder: FrameRecorder,
+  ): Promise<void> {
+    const deadline = monotonicNow() + FIRST_RECORDED_FRAME_WAIT_MS;
+    const pause = (ms: number) =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, Math.max(0, ms));
+        t.unref?.();
+      });
+    while (recorder.framesWritten === 0 && !recorder.failed) {
+      const forced = await handle.forceFrame().catch(() => false);
+      // The forced frame was queued on `state.chain` synchronously, inside
+      // `forceFrame()`, so awaiting the chain covers its fan-out.
+      const remaining = deadline - monotonicNow();
+      if (remaining <= 0) return;
+      await Promise.race([state.chain, pause(remaining)]);
+      if (recorder.framesWritten > 0 || monotonicNow() >= deadline) return;
+      if (!forced) await pause(Math.min(100, deadline - monotonicNow()));
+      if (monotonicNow() >= deadline) return;
+    }
   }
 
   /**
@@ -2026,6 +2095,7 @@ export class ManagedSession {
         .finalize({
           stoppedAtMs: rec.stoppedAtMs,
           framesWritten: rec.recorder.framesWritten,
+          framesDropped: rec.recorder.framesDropped,
           failed: rec.recorder.failed,
           ...(lastError
             ? { errorMessage: sanitizeMessage(redactServerPaths(lastError.message)) }
@@ -2065,6 +2135,7 @@ export class ManagedSession {
       startedAtMs: rec.startedAtMs,
       ...(rec.stoppedAtMs !== undefined ? { stoppedAtMs: rec.stoppedAtMs } : {}),
       framesWritten: rec.recorder.framesWritten,
+      framesDropped: rec.recorder.framesDropped,
       failed: rec.recorder.failed,
     };
   }

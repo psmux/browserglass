@@ -75,6 +75,8 @@ export interface RecordingStopped extends Envelope {
   stoppedAtMs: number;
   /** How many frames actually reached the sink; see `FrameRecorder.framesWritten`'s own doc (attempted, not necessarily all durable if the process crashes mid write). */
   framesWritten: number;
+  /** Frames skipped for this recording because its sink was behind the stream (backpressure). Zero on a healthy recording; a large number means the recording has gaps. Absent from a gateway that predates the field. */
+  framesDropped?: number;
   /** True if the recording degraded to a no-op before this stop, per `packages/core/src/recording/frame-recorder.ts`'s "Degradation on failure": `framesWritten` still counts whatever reached the sink before that happened. */
   failed: boolean;
 }
@@ -98,6 +100,8 @@ export interface RecordingSummary {
   startedAtMs: number;
   stoppedAtMs?: number;
   framesWritten: number;
+  /** Frames skipped for this recording because its sink was behind the stream (backpressure). Zero on a healthy recording; a large number means the recording has gaps. Absent from a gateway that predates the field. */
+  framesDropped?: number;
   failed: boolean;
 }
 

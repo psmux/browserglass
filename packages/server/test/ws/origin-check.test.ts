@@ -71,6 +71,19 @@ describe('checkUpgradeOrigin', () => {
     expect(result.allowed).toBe(true);
   });
 
+  it('treats a "*" entry inside a list as the wildcard (bgls serve --cors "*" yields ["*"])', () => {
+    const result = checkUpgradeOrigin(
+      req({ host: 'gateway.example:7799', origin: 'https://anywhere.example.com' }),
+      ['*'],
+    );
+    expect(result.allowed).toBe(true);
+    const mixed = checkUpgradeOrigin(
+      req({ host: 'gateway.example:7799', origin: 'https://anywhere.example.com' }),
+      ['https://widget.example.com', '*'],
+    );
+    expect(mixed.allowed).toBe(true);
+  });
+
   it('denies a malformed Origin header that fails to parse as a URL, unless allowedOrigins is "*"', () => {
     const result = checkUpgradeOrigin(
       req({ host: 'gateway.example:7799', origin: 'not a url' }),
