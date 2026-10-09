@@ -55,7 +55,7 @@ try {
   await sleep(800);
   seconds = await recordWithScreenshots(browser, 'github-releases', async () => {
     await caption(browser, '1/4', `Open the ${REPO} releases page`);
-    await sleep(1000);
+    await sleep(800);
     await caption(browser, '2/4', `Read the latest ${COUNT} releases`);
     await sleep(600);
 
@@ -84,7 +84,7 @@ try {
       releases.push(found[i]);
       const sel = `a.Link--primary[href="/${REPO}/releases/tag/${encodeURIComponent(found[i].tag)}"]`;
       await browser.evaluate(
-        (s) => document.querySelector(s).scrollIntoView({ block: 'center' }),
+        (s) => document.querySelector(s).scrollIntoView({ block: 'center', behavior: 'instant' }),
         sel,
       );
       await caption(
@@ -125,7 +125,7 @@ try {
       releases,
     );
     await caption(browser, '4/4', `Saved ${releases.length} releases to out/releases.json`);
-    await sleep(1300);
+    await sleep(700);
   });
 } finally {
   // On a busy machine ending the browser can fail (E_TERMINATE_FAILED); say

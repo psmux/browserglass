@@ -67,7 +67,7 @@ node examples/showcase/wikipedia-research.mjs
 
 ## Pull the latest releases
 
-<sub>github.com · Research</sub>
+<sub>github.com/microsoft/vscode · Research</sub>
 
 ![Pull the latest releases](media/showcase/github-releases.gif)
 
