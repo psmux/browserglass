@@ -619,6 +619,23 @@ export class BrowserRouter {
   }
 
   /**
+   * The node a release sends its terminate to. Normally the row's own
+   * node. A standalone gateway reaches no other node, so for a row naming
+   * another one (left by a previous run of this gateway) it asks its own
+   * node instead: `LocalNode.terminate` then answers from the runtime
+   * inventory, reporting a browser that died with that run as already
+   * gone and refusing one that is still running unadopted. Addressed to
+   * the dead node id, the call was refused outright and every release of
+   * such a row failed with E_TERMINATE_FAILED until the startup sweep
+   * retired it.
+   */
+  private terminateTargetFor(instance: Instance): NodeId {
+    const own = this.nodeRegistry.id();
+    if (!this.reachesPeerNodes) return own;
+    return instance.nodeId ?? own;
+  }
+
+  /**
    * Marks the row of an abandoned profile holder `failed` once a fresh
    * launch has taken over its profile lease. Only reached on a standalone
    * gateway (`reachesPeerNodes: false`) for a row naming another node,
@@ -1867,13 +1884,10 @@ export class BrowserRouter {
     // asking harder. `gracefulMs` is deliberately not forwarded for the
     // same reason.
     let browserLeftRunning = false;
+    const terminateOn = this.terminateTargetFor(instance);
     try {
       if (opts.leaveBrowserRunning === true) {
-        const detachResult = await this.nodes.terminate(
-          instance.nodeId ?? this.nodeRegistry.id(),
-          instanceId,
-          'detach',
-        );
+        const detachResult = await this.nodes.terminate(terminateOn, instanceId, 'detach');
         // Earned, not assumed. `LocalNode.terminate` refuses a detach for
         // any runtime that launched the browser itself and runs a real
         // teardown instead, reporting that through `effective`. Reading
@@ -1884,11 +1898,7 @@ export class BrowserRouter {
         browserLeftRunning = detachResult.effective === 'detach';
       } else {
         const gracefulMs = opts.gracefulMs ?? 3000;
-        await this.terminateGraceThenForce(
-          instance.nodeId ?? this.nodeRegistry.id(),
-          instanceId,
-          gracefulMs,
-        );
+        await this.terminateGraceThenForce(terminateOn, instanceId, gracefulMs);
       }
     } catch (forceErr) {
       // Both attempts failed: the browser is not confirmed dead. The

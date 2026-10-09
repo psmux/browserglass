@@ -168,4 +168,25 @@ describe('acquire after a gateway crash', () => {
     expect(handle.result.instanceId).not.toBe(staleId);
     expect(nodes.launchCount).toBe(1);
   });
+
+  it('a standalone gateway sends the terminate for such a row to its own node', async () => {
+    // Addressed to the dead node id, LocalNodeTransport refused the call
+    // and the release failed with E_TERMINATE_FAILED every time.
+    const { router, nodes, principal, staleId, nodeRegistry } = await setUp({
+      reachesPeerNodes: false,
+    });
+
+    const result = await router.release(staleId, {}, principal);
+
+    expect(result.outcome).toBe('terminated');
+    expect(nodes.terminateCalls[0]?.nodeId).toBe(nodeRegistry.id());
+  });
+
+  it('with a peer link, the terminate still goes to the row own node', async () => {
+    const { router, nodes, principal, staleId, deadNode } = await setUp({ reachesPeerNodes: true });
+
+    await router.release(staleId, {}, principal);
+
+    expect(nodes.terminateCalls[0]?.nodeId).toBe(deadNode);
+  });
 });
