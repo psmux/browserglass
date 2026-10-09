@@ -114,9 +114,17 @@ export type RateBucketName =
  * hard in two or three panes at once starves a fourth, which reproduces
  * the "several browsers can never be driven at once" symptom that window
  * isolation fixes, just from a different mechanism than the active-target
- * steal. `nav`/`cursor`/`probeFull`/`capture`/`ack` stay connection-wide:
- * their ceilings are already generous relative to how often a viewer
- * actually navigates or captures.
+ * steal. `cursor`/`capture` stay connection-wide: their ceilings are
+ * already generous relative to how often a viewer actually moves a shared
+ * cursor or captures.
+ *
+ * `nav` is scoped per TARGET too. One person rarely navigates faster than
+ * 4/sec, but one script driving several panes does: back, forward and
+ * reload across four targets at once is 12 messages in a breath, and a
+ * connection-wide burst of 8 refused the ninth.
+ * `parallel-live-streams.test.ts` read `Rate limit exceeded for nav.back`
+ * on fast CI runners for exactly that reason. Per target, each pane keeps
+ * the budget a single-pane app always had, bounded overall by `maxTargets`.
  *
  * `probeFull` is scoped per TARGET, for the same reason and found the same
  * way. Its ceiling is deliberately tight (2/sec, burst 4) because a full
@@ -191,6 +199,7 @@ export type RateBucketName =
 const PER_SCOPE_BUCKETS: ReadonlySet<RateBucketName> = new Set([
   'input',
   'control',
+  'nav',
   'ack',
   'probeFull',
   'evaluate',
@@ -339,6 +348,7 @@ export class ViewerRateLimiters {
       RateBucketName,
       | 'input'
       | 'control'
+      | 'nav'
       | 'ack'
       | 'probeFull'
       | 'evaluate'
@@ -369,7 +379,6 @@ export class ViewerRateLimiters {
   ) {
     this.limits = limits;
     this.connectionBuckets = {
-      nav: new TokenBucket(limits.navRatePerSec, nowMono),
       cursor: new TokenBucket(limits.cursorRate, nowMono),
       capture: new TokenBucket(perSecondAsRateLimit(limits.captureRatePerSec), nowMono),
     };
@@ -397,19 +406,21 @@ export class ViewerRateLimiters {
         const limit =
           name === 'input'
             ? perSecondAsRateLimit(this.limits.inputRatePerSec)
-            : name === 'ack'
-              ? this.limits.ackRate
-              : name === 'probeFull'
-                ? this.limits.probeFullRate
-                : name === 'console' || name === 'pageError' || name === 'network'
-                  ? DIAGNOSTICS_BUCKET_DEFAULTS[name]
-                  : name === 'evaluate'
-                    ? EVALUATE_BUCKET_DEFAULT
-                    : name === 'evaluateInternal'
-                      ? INTERNAL_EVALUATE_BUCKET_DEFAULT
-                      : name === 'pagemap'
-                        ? PAGEMAP_BUCKET_DEFAULT
-                        : this.limits.controlRatePerSec;
+            : name === 'nav'
+              ? this.limits.navRatePerSec
+              : name === 'ack'
+                ? this.limits.ackRate
+                : name === 'probeFull'
+                  ? this.limits.probeFullRate
+                  : name === 'console' || name === 'pageError' || name === 'network'
+                    ? DIAGNOSTICS_BUCKET_DEFAULTS[name]
+                    : name === 'evaluate'
+                      ? EVALUATE_BUCKET_DEFAULT
+                      : name === 'evaluateInternal'
+                        ? INTERNAL_EVALUATE_BUCKET_DEFAULT
+                        : name === 'pagemap'
+                          ? PAGEMAP_BUCKET_DEFAULT
+                          : this.limits.controlRatePerSec;
         bucket = new TokenBucket(limit, nowMono);
         this.perScopeBuckets.set(key, bucket);
       }
@@ -420,6 +431,7 @@ export class ViewerRateLimiters {
         RateBucketName,
         | 'input'
         | 'control'
+        | 'nav'
         | 'ack'
         | 'probeFull'
         | 'evaluate'

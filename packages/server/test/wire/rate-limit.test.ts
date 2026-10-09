@@ -48,16 +48,22 @@ describe('ViewerRateLimiters: input/control scoped per target', () => {
     expect(limiters.take('control', 0, 'tgt_b')).toBe(true);
   });
 
-  it('connection-wide buckets (nav, cursor, probeFull, capture, ack) are unaffected: still one budget shared across every target', () => {
+  it('nav is per target: a script driving several panes gets one budget per pane', () => {
     const limiters = new ViewerRateLimiters(LIMITS, 0);
     for (let i = 0; i < LIMITS.navRatePerSec.burst; i++) {
       expect(limiters.take('nav', 0, 'tgt_a')).toBe(true);
     }
     expect(limiters.take('nav', 0, 'tgt_a')).toBe(false);
-    // A different targetId does not get its own nav budget: this bucket is
-    // deliberately still connection-wide (see the module doc comment on
-    // `PER_TARGET_BUCKETS`).
-    expect(limiters.take('nav', 0, 'tgt_b')).toBe(false);
+    expect(limiters.take('nav', 0, 'tgt_b')).toBe(true);
+  });
+
+  it('connection-wide buckets (cursor, capture) are unaffected: still one budget shared across every target', () => {
+    const limiters = new ViewerRateLimiters(LIMITS, 0);
+    for (let i = 0; i < LIMITS.captureRatePerSec; i++) {
+      expect(limiters.take('capture', 0, 'tgt_a')).toBe(true);
+    }
+    expect(limiters.take('capture', 0, 'tgt_a')).toBe(false);
+    expect(limiters.take('capture', 0, 'tgt_b')).toBe(false);
   });
 
   it('an input message with no resolvable targetId still gets rate limited, in one shared bucket, rather than bypassing the check', () => {
