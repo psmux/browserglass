@@ -1,14 +1,14 @@
 /**
- * The terminate ladder. Seven steps: attempt a CDP clean close,
- * send the graceful signal, wait out the grace period, escalate to force,
- * confirm the process is actually gone, stop the supervisor, then build
- * the result. `mode: 'detach'` skips steps 1 through 5 (nothing is asked
+ * The terminate ladder. Seven steps: ask Chrome to close itself over CDP
+ * (every mode but 'force'), send the graceful signal, wait out the grace
+ * period, escalate to force, confirm the process is actually gone, stop
+ * the supervisor, then build the result. `mode: 'detach'` skips steps 1 through 5 (nothing is asked
  * of the process at all) and jumps straight to stopping supervision.
  *
- * On Windows, `'graceful'` collapses to `taskkill /T /F` (there is no
- * softer signal `taskkill` can send a GUI-subsystem process tree), so
- * `TerminateResult.effective` reports `'force'` with a warning saying so,
- * never silently escalating.
+ * On Windows, a `'graceful'` that step 1 did not finish collapses to
+ * `taskkill /T /F` (there is no softer signal `taskkill` can send a
+ * GUI-subsystem process tree), so `TerminateResult.effective` reports
+ * `'force'` with a warning saying so, never silently escalating.
  *
  * Step 5's confirmation is NOT a check on `pid` alone. The pid this ladder
  * is handed (the one `BrowserRuntime.launch()` resolved and supervises) is
@@ -82,6 +82,43 @@ async function waitForExit(
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
   return !pidAlive(pid);
+}
+
+/** Kept back from the caller's grace period so the soft close finishes before a caller side escalation to 'force' fires. */
+const SOFT_CLOSE_MARGIN_MS = 500;
+
+/**
+ * How long step 1 may spend on `Browser.close` plus waiting for Chrome to
+ * exit: the configured CDP close timeout, capped at the grace period less
+ * {@link SOFT_CLOSE_MARGIN_MS}. Zero (skip step 1) when the grace period
+ * leaves no room for it.
+ */
+export function softCloseBudgetMs(cdpCloseTimeoutMs: number, gracePeriodMs: number): number {
+  return Math.max(0, Math.min(cdpCloseTimeoutMs, gracePeriodMs - SOFT_CLOSE_MARGIN_MS));
+}
+
+/**
+ * Waits, until `deadlineAt`, for a browser asked to close to actually be
+ * gone. The launched `pid` going away is the cheap signal; when it has, and
+ * a profile directory is known, one scan by that directory confirms
+ * nothing else still holds it (on Windows the process holding the profile
+ * is not always `pid`, see this module's own doc). Never kills anything:
+ * whatever is still running at the deadline is left to the steps below.
+ */
+async function waitForBrowserGone(
+  pid: number,
+  profilePath: string | null,
+  deadlineAt: number,
+): Promise<boolean> {
+  while (Date.now() < deadlineAt) {
+    if (!pidAlive(pid)) {
+      if (profilePath === null) return true;
+      const holders = await chromeProcsForDataDirAsync(profilePath, { maxAgeMs: 0 });
+      if (holders.length === 0) return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
 }
 
 /**
@@ -170,10 +207,27 @@ export async function terminateBrowser(opts: TerminateOptions): Promise<Terminat
 
   const isWindows = platform() === 'win32';
 
-  // Step 1: 'clean' attempts a CDP-level Browser.close first, giving
-  // Chrome the chance to flush Cookies, Local Storage, and Preferences.
-  if (opts.mode === 'clean' && opts.cdpWsUrl) {
-    await sendBrowserClose(opts.cdpWsUrl, opts.cdpCloseTimeoutMs);
+  // Step 1: every mode short of 'force' first asks Chrome to close itself
+  // over CDP (`Browser.close`) and gives it a moment to exit. A controlled
+  // shutdown is the only one in which Chrome writes its cookie store, Local
+  // Storage and Preferences: it batches cookie writes about every 30
+  // seconds, and the kill steps below skip the final batch. This used to
+  // run for 'clean' only, and even there step 2 followed the
+  // acknowledgement straight away, so on Windows `taskkill` landed while
+  // Chrome was still writing. A persistent profile released within 30
+  // seconds of a login lost the login.
+  //
+  // The wait is bounded by `softCloseBudgetMs`, which stays inside the
+  // caller's grace period: `BrowserRouter.release()` escalates to a second,
+  // 'force' terminate when `gracePeriodMs` passes with no answer, and that
+  // force call must not overtake a Chrome that is busy closing itself.
+  if (opts.mode !== 'force' && opts.cdpWsUrl) {
+    const budgetMs = softCloseBudgetMs(opts.cdpCloseTimeoutMs, opts.gracePeriodMs);
+    if (budgetMs > 0) {
+      const softDeadline = Date.now() + budgetMs;
+      await sendBrowserClose(opts.cdpWsUrl, budgetMs);
+      await waitForBrowserGone(opts.pid, opts.profilePath, softDeadline);
+    }
   }
 
   // Step 2: send the graceful signal, unless the mode already demands
