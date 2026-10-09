@@ -1,4 +1,4 @@
-// Plays 2048 with arrow keys for about fifteen seconds.
+// Plays 2048 with arrow keys for about twelve seconds.
 //
 // The strategy is the simple one everybody learns first: keep the big tiles
 // in the bottom left corner by cycling Down, Left, Down, Right, and press Up
@@ -40,7 +40,7 @@ try {
       await caption(browser, '1/3', 'Open 2048 and play it with arrow keys');
       await highlight(browser, 'text=New Game', 900);
 
-      const until = Date.now() + 15000;
+      const until = Date.now() + 12000;
       let i = 0;
       let stuck = 0;
       while (Date.now() < until) {
@@ -66,7 +66,7 @@ try {
         }
       }
       score = await readScore(browser);
-      await caption(browser, '3/3', `Done: ${moves} moves in 15 seconds, score ${score}`);
+      await caption(browser, '3/3', `Done: ${moves} moves in 12 seconds, score ${score}`);
       await sleep(1200);
     },
     { fps: 8 },

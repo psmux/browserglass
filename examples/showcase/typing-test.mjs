@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { caption, highlight, launch, recordRun, sleep } from './lib/showcase.mjs';
+import { caption, clickShown, highlight, launch, recordRun, sleep } from './lib/showcase.mjs';
 
 const outDir = join(dirname(fileURLToPath(import.meta.url)), 'out');
 
@@ -35,8 +35,7 @@ try {
     'typing-test',
     async () => {
       await caption(browser, '1/3', 'A 25 word typing test, typed by a script');
-      await highlight(browser, '#wc-25', 700);
-      await browser.click('#wc-25');
+      await clickShown(browser, '#wc-25', 700);
       await sleep(500);
       await browser.click('#input-field');
 

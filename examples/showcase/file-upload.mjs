@@ -8,7 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { caption, highlight, launch, recordRun, sleep } from './lib/showcase.mjs';
+import { caption, clickShown, highlight, launch, recordRun, sleep } from './lib/showcase.mjs';
 
 const outDir = join(dirname(fileURLToPath(import.meta.url)), 'out');
 const fileName = 'release-notes.txt';
@@ -19,51 +19,51 @@ writeFileSync(
   'BrowserGlass upload demo\nThis file was created by examples/showcase/file-upload.mjs\n',
 );
 
-// waitFor() can throw "Inspected target navigated or closed" when a click's
-// navigation lands mid poll, so retry it across the page swap.
-async function waitAfterNav(browser, selector) {
-  for (let i = 0; ; i++) {
-    try {
-      return await browser.waitFor(selector);
-    } catch (err) {
-      if (i >= 5 || !/navigated or closed/.test(String(err?.message))) throw err;
-      await sleep(300);
-    }
-  }
+async function upload(browser) {
+  await caption(browser, '1/3', 'Open the upload form');
+  await sleep(900);
+
+  await caption(browser, '2/3', `Attach ${fileName} with setInputFiles()`);
+  await highlight(browser, '#file-upload', 700);
+  const names = await browser.setInputFiles('#file-upload', [
+    { name: fileName, data: readFileSync(filePath), mime: 'text/plain' },
+  ]);
+  await caption(browser, '2/3', `Attached ${names.join(', ')}`);
+  await sleep(900);
+
+  await clickShown(browser, '#file-submit', 600);
+  await browser.waitFor('#uploaded-files', { timeoutMs: 12000 });
+  const heading = (await browser.innerText('h3')).trim();
+  const shown = (await browser.innerText('#uploaded-files')).trim();
+  await caption(browser, '3/3', `Server says: ${heading} ${shown}`);
+  await highlight(browser, '#uploaded-files', 900);
+  return { heading, shown };
 }
 
+// This demo host sometimes stops sending a page halfway, so the result
+// never shows up. When that happens, record the run again.
 const browser = await launch();
-let shown = '';
-let heading = '';
+let result;
 let seconds = 0;
 try {
-  // Load the first page before recording, so the clip does not open on a
-  // blank tab. This demo host is sometimes slow to answer, so give it time.
-  await browser.navigate('https://the-internet.herokuapp.com/upload');
-  await browser.waitFor('#file-upload', { timeoutMs: 45000 });
-  seconds = await recordRun(browser, 'file-upload', async () => {
-    await caption(browser, '1/3', 'Open the upload form');
-    await sleep(900);
-
-    await caption(browser, '2/3', `Attach ${fileName} with setInputFiles()`);
-    await highlight(browser, '#file-upload', 700);
-    const names = await browser.setInputFiles('#file-upload', [
-      { name: fileName, data: readFileSync(filePath), mime: 'text/plain' },
-    ]);
-    await caption(browser, '2/3', `Attached ${names.join(', ')}`);
-    await sleep(900);
-
-    await highlight(browser, '#file-submit', 600);
-    await browser.click('#file-submit');
-    await waitAfterNav(browser, '#uploaded-files');
-    heading = (await browser.innerText('h3')).trim();
-    shown = (await browser.innerText('#uploaded-files')).trim();
-    await caption(browser, '3/3', `Server says: ${heading} ${shown}`);
-    await highlight(browser, '#uploaded-files', 900);
-  });
+  for (let attempt = 1; !result; attempt++) {
+    try {
+      seconds = await recordRun(
+        browser,
+        'file-upload',
+        async () => {
+          result = await upload(browser);
+        },
+        { url: 'https://the-internet.herokuapp.com/upload', ready: '#file-upload' },
+      );
+    } catch (err) {
+      if (attempt >= 4) throw err;
+      console.error(`attempt ${attempt}: ${err.message.split('\n')[0]}`);
+    }
+  }
 } finally {
   await browser.release();
 }
 
 console.log(`Uploaded examples/showcase/out/${fileName}`);
-console.log(`Page heading: "${heading}", file shown: "${shown}" (${seconds}s)`);
+console.log(`Page heading: "${result.heading}", file shown: "${result.shown}" (${seconds}s)`);

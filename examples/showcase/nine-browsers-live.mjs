@@ -110,7 +110,20 @@ try {
   const pageUrl = `http://127.0.0.1:${pagePort}/`;
 
   // Give every member something on screen before the camera starts.
-  await swarm.all((m) => m.client.navigate('about:blank'));
+  await swarm.all(async (m, i) => {
+    await m.client.navigate('about:blank');
+    await m.client.evaluate((n) => {
+      document.body.style.cssText =
+        'margin:0;height:100vh;display:grid;place-items:center;background:#161b22;color:#8b949e;font:600 64px system-ui,Segoe UI,sans-serif';
+      document.body.textContent = `Browser ${n}, ready`;
+      // A slow pulse keeps frames coming, so every pane has a picture
+      // before the sites start loading.
+      document.body.animate([{ opacity: 1 }, { opacity: 0.55 }, { opacity: 1 }], {
+        duration: 1600,
+        iterations: Number.POSITIVE_INFINITY,
+      });
+    }, i + 1);
+  });
 
   // 3. The camera: a tenth browser that opens the grid page.
   camera = await launch({ viewport: { width: 1280, height: 860 } });
@@ -126,6 +139,7 @@ try {
     await sleep(500);
   }
   console.log('pane states:', paneStates.join(' '));
+  await sleep(1000);
 
   const results = [];
   const seconds = await recordRun(
@@ -133,7 +147,7 @@ try {
     'nine-browsers-live',
     async () => {
       await caption(camera, '1/3', 'Nine browsers, each streamed live into this page');
-      await sleep(1200);
+      await sleep(1000);
 
       await caption(camera, '2/3', 'All nine open a different site at the same time');
       const t0 = Date.now();
@@ -149,14 +163,13 @@ try {
           `${failed.length} member(s) failed:`,
           failed.map((f) => String(f.reason)),
         );
-      await sleep(1500);
+      await sleep(1000);
 
       await caption(camera, '3/3', 'Each one scrolls its page, in parallel');
-      for (let k = 0; k < 4; k++) {
-        await swarm.all((m) => m.client.scroll({ dy: 350 }));
-        await sleep(700);
+      for (let k = 0; k < 3; k++) {
+        await swarm.all((m) => m.client.scroll({ dy: 400 }));
+        await sleep(600);
       }
-      await sleep(800);
     },
     { fps: 8 },
   );

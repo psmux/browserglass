@@ -7,23 +7,10 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { caption, highlight, launch, recordRun, sleep } from './lib/showcase.mjs';
+import { caption, clickShown, launch, recordRun, sleep } from './lib/showcase.mjs';
 
 const outDir = join(dirname(fileURLToPath(import.meta.url)), 'out');
 const TAG = 'inspirational';
-
-// waitFor() can throw "Inspected target navigated or closed" when the
-// click's navigation lands mid poll, so retry it across the page swap.
-async function waitAfterNav(browser, selector) {
-  for (let i = 0; ; i++) {
-    try {
-      return await browser.waitFor(selector);
-    } catch (err) {
-      if (i >= 5 || !/navigated or closed/.test(String(err?.message))) throw err;
-      await sleep(300);
-    }
-  }
-}
 
 const readQuotes = (browser) =>
   browser.evaluate(() =>
@@ -37,44 +24,40 @@ const browser = await launch();
 const quotes = [];
 let seconds = 0;
 try {
-  await browser.navigate('https://quotes.toscrape.com/');
-  await browser.waitFor('.tags-box');
-  await sleep(600);
-  seconds = await recordRun(browser, 'quotes-by-tag', async () => {
-    await caption(browser, '1/4', `Pick "${TAG}" from the Top Ten tags`);
-    await sleep(800);
-    const tagLink = `.tags-box a[href="/tag/${TAG}/"]`;
-    await highlight(browser, tagLink);
-    await browser.click(tagLink);
-    await waitAfterNav(browser, `text=Viewing tag: ${TAG}`);
+  seconds = await recordRun(
+    browser,
+    'quotes-by-tag',
+    async () => {
+      await caption(browser, '1/4', `Pick "${TAG}" from the Top Ten tags`);
+      await sleep(800);
+      const tagLink = `.tags-box a[href="/tag/${TAG}/"]`;
+      await clickShown(browser, tagLink, 700);
+      await browser.waitFor(`text=Viewing tag: ${TAG}`);
 
-    for (let page = 1; ; page++) {
-      quotes.push(...(await readQuotes(browser)));
-      await caption(browser, '2/4', `Page ${page}: ${quotes.length} quotes collected`);
-      await sleep(700);
-      await browser.scroll({ dy: 700 });
-      await sleep(700);
-      const hasNext = await browser.evaluate(() => !!document.querySelector('li.next a'));
-      if (!hasNext) break;
-      await browser.evaluate(() =>
-        document.querySelector('li.next a').scrollIntoView({ block: 'center' }),
-      );
-      await caption(browser, '3/4', 'Follow "Next" to the following page');
-      await highlight(browser, 'li.next a');
-      await browser.click('li.next a');
-      await waitAfterNav(browser, 'li.previous a');
-    }
+      for (let page = 1; ; page++) {
+        quotes.push(...(await readQuotes(browser)));
+        await caption(browser, '2/4', `Page ${page}: ${quotes.length} quotes collected`);
+        await sleep(700);
+        await browser.scroll({ dy: 700 });
+        await sleep(700);
+        const hasNext = await browser.evaluate(() => !!document.querySelector('li.next a'));
+        if (!hasNext) break;
+        await browser.evaluate(() =>
+          document.querySelector('li.next a').scrollIntoView({ block: 'center' }),
+        );
+        await caption(browser, '3/4', 'Follow "Next" to the following page');
+        await clickShown(browser, 'li.next a', 700);
+        await browser.waitFor('li.previous a');
+      }
 
-    await browser.evaluate(() => window.scrollTo(0, 0));
-    await caption(browser, '4/4', `Saved ${quotes.length} quotes to out/quotes.json`);
-    await sleep(1200);
-  });
+      await browser.evaluate(() => window.scrollTo(0, 0));
+      await caption(browser, '4/4', `Saved ${quotes.length} quotes to out/quotes.json`);
+      await sleep(1200);
+    },
+    { url: 'https://quotes.toscrape.com/', ready: '.tags-box' },
+  );
 } finally {
-  // On a busy machine ending the browser can fail (E_TERMINATE_FAILED); say
-  // so, but still write out the data that was collected.
-  await browser
-    .release()
-    .catch((err) => console.error(`could not end the browser: ${err.message}`));
+  await browser.release();
 }
 
 mkdirSync(outDir, { recursive: true });

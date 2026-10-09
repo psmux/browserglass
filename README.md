@@ -15,28 +15,33 @@ Every clip below is a real run, recorded by BrowserGlass itself, and every one i
 
 <table>
 <tr>
-<td width="33%" valign="top"><a href="examples/showcase/books-to-csv.mjs"><img src="docs/media/showcase/books-to-csv.gif" alt="Export a book catalog to CSV" width="100%"></a><br><b>Export a book catalog to CSV</b><br><sub>books.toscrape.com · 0:11 · Data extraction</sub></td>
-<td width="33%" valign="top"><a href="examples/showcase/demo-shop-checkout.mjs"><img src="docs/media/showcase/demo-shop-checkout.gif" alt="Log in, fill a cart, check out" width="100%"></a><br><b>Log in, fill a cart, check out</b><br><sub>saucedemo.com · 0:17 · Forms and checkout</sub></td>
-<td width="33%" valign="top"><a href="examples/showcase/nine-browsers-live.mjs"><img src="docs/media/showcase/nine-browsers-live.gif" alt="Nine browsers live in one page" width="100%"></a><br><b>Nine browsers live in one page</b><br><sub>9 sites at once · 0:19 · Parallel</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/nine-browsers-live.mjs"><img src="docs/media/showcase/nine-browsers-live.gif" alt="Nine browsers live in one page" width="100%"></a><br><b>Nine browsers live in one page</b><br><sub>9 sites at once · 0:17 · Parallel</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/demo-shop-checkout.mjs"><img src="docs/media/showcase/demo-shop-checkout.gif" alt="Log in, fill a cart, check out" width="100%"></a><br><b>Log in, fill a cart, check out</b><br><sub>saucedemo.com · 0:13 · Forms and checkout</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/mcp-agent.mjs"><img src="docs/media/showcase/mcp-agent.gif" alt="An MCP agent drives the browser" width="100%"></a><br><b>An MCP agent drives the browser</b><br><sub>wikipedia.org · 0:11 · Agent workflows</sub></td>
 </tr>
 <tr>
-<td width="33%" valign="top"><a href="examples/showcase/mcp-agent.mjs"><img src="docs/media/showcase/mcp-agent.gif" alt="An MCP agent drives the browser" width="100%"></a><br><b>An MCP agent drives the browser</b><br><sub>wikipedia.org · 0:12 · Agent workflows</sub></td>
-<td width="33%" valign="top"><a href="examples/showcase/wikipedia-research.mjs"><img src="docs/media/showcase/wikipedia-research.gif" alt="Research a topic into notes" width="100%"></a><br><b>Research a topic into notes</b><br><sub>wikipedia.org · 0:13 · Research</sub></td>
-<td width="33%" valign="top"><a href="examples/showcase/infobox-table.mjs"><img src="docs/media/showcase/infobox-table.gif" alt="Compare four languages in a table" width="100%"></a><br><b>Compare four languages in a table</b><br><sub>wikipedia.org · 0:13 · Data extraction</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/books-to-csv.mjs"><img src="docs/media/showcase/books-to-csv.gif" alt="Export a book catalog to CSV" width="100%"></a><br><b>Export a book catalog to CSV</b><br><sub>books.toscrape.com · 0:10 · Data extraction</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/draw-canvas.mjs"><img src="docs/media/showcase/draw-canvas.gif" alt="Draw on a canvas with drag()" width="100%"></a><br><b>Draw on a canvas with drag()</b><br><sub>excalidraw.com · 0:10 · Games and real time</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/smoke-test.mjs"><img src="docs/media/showcase/smoke-test.gif" alt="Smoke test seven pages, report PASS/FAIL" width="100%"></a><br><b>Smoke test seven pages, report PASS/FAIL</b><br><sub>the-internet.herokuapp.com · 0:14 · Testing and QA</sub></td>
 </tr>
 <tr>
-<td width="33%" valign="top"><a href="examples/showcase/todo-app.mjs"><img src="docs/media/showcase/todo-app.gif" alt="Add, complete and filter todos" width="100%"></a><br><b>Add, complete and filter todos</b><br><sub>TodoMVC demo · 0:16 · Testing and QA</sub></td>
-<td width="33%" valign="top"><a href="examples/showcase/file-upload.mjs"><img src="docs/media/showcase/file-upload.gif" alt="Upload a file through a form" width="100%"></a><br><b>Upload a file through a form</b><br><sub>the-internet.herokuapp.com · 0:07 · Forms and checkout</sub></td>
-<td width="33%" valign="top"><a href="examples/showcase/quotes-by-tag.mjs"><img src="docs/media/showcase/quotes-by-tag.gif" alt="Collect every quote for a tag" width="100%"></a><br><b>Collect every quote for a tag</b><br><sub>quotes.toscrape.com · 0:11 · Data extraction</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/wikipedia-research.mjs"><img src="docs/media/showcase/wikipedia-research.gif" alt="Research a topic into notes" width="100%"></a><br><b>Research a topic into notes</b><br><sub>wikipedia.org · 0:12 · Research</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/infobox-table.mjs"><img src="docs/media/showcase/infobox-table.gif" alt="Compare four languages in a table" width="100%"></a><br><b>Compare four languages in a table</b><br><sub>wikipedia.org · 0:12 · Data extraction</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/todo-app.mjs"><img src="docs/media/showcase/todo-app.gif" alt="Add, complete and filter todos" width="100%"></a><br><b>Add, complete and filter todos</b><br><sub>TodoMVC demo · 0:14 · Testing and QA</sub></td>
 </tr>
 <tr>
-<td width="33%" valign="top"><a href="examples/showcase/github-releases.mjs"><img src="docs/media/showcase/github-releases.gif" alt="Pull the latest releases" width="100%"></a><br><b>Pull the latest releases</b><br><sub>github.com/microsoft/vscode · 0:11 · Research</sub></td>
-<td width="33%" valign="top"><a href="examples/showcase/typing-test.mjs"><img src="docs/media/showcase/typing-test.gif" alt="Take a typing test, key by key" width="100%"></a><br><b>Take a typing test, key by key</b><br><sub>typings.gg · 0:18 · Games and real time</sub></td>
-<td width="33%" valign="top"><a href="examples/showcase/play-2048.mjs"><img src="docs/media/showcase/play-2048.gif" alt="Play 2048 with arrow keys" width="100%"></a><br><b>Play 2048 with arrow keys</b><br><sub>play2048.co · 0:19 · Games and real time</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/block-images.mjs"><img src="docs/media/showcase/block-images.gif" alt="Block images and CSS, crawl 2.5x faster" width="100%"></a><br><b>Block images and CSS, crawl 2.5x faster</b><br><sub>books.toscrape.com · 0:13 · Data extraction</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/file-upload.mjs"><img src="docs/media/showcase/file-upload.gif" alt="Upload a file through a form" width="100%"></a><br><b>Upload a file through a form</b><br><sub>the-internet.herokuapp.com · 0:08 · Forms and checkout</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/quotes-by-tag.mjs"><img src="docs/media/showcase/quotes-by-tag.gif" alt="Collect every quote for a tag" width="100%"></a><br><b>Collect every quote for a tag</b><br><sub>quotes.toscrape.com · 0:09 · Data extraction</sub></td>
 </tr>
 <tr>
-<td width="33%" valign="top"><a href="examples/showcase/block-images.mjs"><img src="docs/media/showcase/block-images.gif" alt="Block images and CSS for a faster crawl" width="100%"></a><br><b>Block images and CSS, crawl 2.3x faster</b><br><sub>books.toscrape.com · 0:12 · Data extraction</sub></td>
-<td width="33%" valign="top"><a href="docs/media/agent-and-human.gif"><img src="docs/media/agent-and-human.gif" alt="An agent drives, a person takes over" width="100%"></a><br><b>An agent drives, a person takes over</b><br><sub>Next.js demo in this repo · 0:33 · Agent workflows</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/github-releases.mjs"><img src="docs/media/showcase/github-releases.gif" alt="Pull the latest releases" width="100%"></a><br><b>Pull the latest releases</b><br><sub>github.com/microsoft/vscode · 0:10 · Research</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/typing-test.mjs"><img src="docs/media/showcase/typing-test.gif" alt="Take a typing test, key by key" width="100%"></a><br><b>Take a typing test, key by key</b><br><sub>typings.gg · 0:15 · Games and real time</sub></td>
+<td width="33%" valign="top"><a href="examples/showcase/play-2048.mjs"><img src="docs/media/showcase/play-2048.gif" alt="Play 2048 with arrow keys" width="100%"></a><br><b>Play 2048 with arrow keys</b><br><sub>play2048.co · 0:17 · Games and real time</sub></td>
+</tr>
+<tr>
+<td width="33%" valign="top"><a href="examples/showcase/responsive-screenshots.mjs"><img src="docs/media/showcase/responsive-screenshots.png" alt="Phone, tablet and desktop screenshots" width="100%"></a><br><b>Phone, tablet and desktop screenshots</b><br><sub>books.toscrape.com · exact viewports · Testing and QA</sub></td>
+<td width="33%" valign="top"><a href="examples/nextjs-demo"><img src="docs/media/agent-and-human.gif" alt="An agent drives, a person takes over" width="100%"></a><br><b>An agent drives, a person takes over</b><br><sub>Next.js demo in this repo · 0:33 · Agent workflows</sub></td>
 <td width="33%" valign="top"><a href="docs/media/page-map-and-typing.gif"><img src="docs/media/page-map-and-typing.gif" alt="Map the page, then type like a person" width="100%"></a><br><b>Map the page, then type like a person</b><br><sub>wikipedia.org · 0:09 · Research</sub></td>
 </tr>
 </table>

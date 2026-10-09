@@ -161,14 +161,49 @@ Plays a round with arrow key presses and reads the score off the page as it goes
 node examples/showcase/play-2048.mjs
 ```
 
-## Block images and CSS, crawl 2.3x faster
+## Block images and CSS, crawl 2.5x faster
 
 <sub>books.toscrape.com · Data extraction</sub>
 
 ![Block images and CSS](media/showcase/block-images.gif)
 
-Loads the same catalog page twice, once normally and once with request gate rules that deny images and stylesheets, and compares load time and bytes from the page's own Performance API. On the recorded run: 2.57 s and 332 KB normally, 1.12 s and 75 KB blocked.
+Loads the same catalog page twice, once normally and once with request gate rules that deny images and stylesheets, and compares load time and bytes from the page's own Performance API. On the recorded run: 2.43 s and 332 KB normally, 0.96 s and 75 KB blocked.
 
 ```sh
 node examples/showcase/block-images.mjs
+```
+## Draw on a canvas with drag()
+
+<sub>excalidraw.com · Games and real time</sub>
+
+![Draw on a canvas](media/showcase/draw-canvas.gif)
+
+Picks the rectangle, ellipse and arrow tools and draws each one with `drag()`, which holds the mouse button down while it moves, then labels the drawing with the text tool.
+
+```sh
+node examples/showcase/draw-canvas.mjs
+```
+
+## Smoke test seven pages, report PASS/FAIL
+
+<sub>the-internet.herokuapp.com · Testing and QA</sub>
+
+![Smoke test](media/showcase/smoke-test.gif)
+
+Visits seven example pages one after another, checks one thing on each (checkboxes, a dropdown, a 404 status page, broken images, inputs, key presses, adding and removing elements), saves a screenshot of each, and ends on a PASS/FAIL table drawn into the page. Writes `out/smoke-report.json`. Broken Images fails on purpose: that page is built to have broken images.
+
+```sh
+node examples/showcase/smoke-test.mjs
+```
+
+## Phone, tablet and desktop screenshots
+
+<sub>books.toscrape.com · Testing and QA</sub>
+
+![Responsive screenshots](media/showcase/responsive-screenshots.png)
+
+Opens the same page at 390x844 (2x), 820x1180 and 1440x900 using the `viewport` launch option, and saves one screenshot per size.
+
+```sh
+node examples/showcase/responsive-screenshots.mjs
 ```
