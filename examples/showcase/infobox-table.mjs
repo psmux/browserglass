@@ -34,7 +34,9 @@ async function readInfobox(browser) {
       const td = th.parentElement.querySelector('td');
       // Lists of designers are <li> items or <br> separated; join with commas.
       const parts = [...td.querySelectorAll('li')].map((li) => clean(li.innerText));
-      return (parts.length ? parts : td.innerText.split('\n').map(clean)).filter(Boolean).join(', ');
+      return (parts.length ? parts : td.innerText.split('\n').map(clean))
+        .filter(Boolean)
+        .join(', ');
     };
     // Rust's infobox has no "Designed by" row, only "Developer"; fall back to it.
     const designer = row('Designed by') ? 'Designed by' : 'Developer';
