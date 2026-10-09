@@ -8366,7 +8366,7 @@
         },
         "name": {
           "type": "string",
-          "description": "Restrict to nodes whose computed accessible name equals this once whitespace is trimmed and collapsed on both sides (Chrome reports names like \" Login\" for a button with an icon before its label). A whole-name, case sensitive match, not a substring; the same rule as Playwright's `get_by_role(name=..., exact=True)`."
+          "description": "Restrict to nodes whose computed accessible name equals this once, on both sides, Unicode private use characters (icon font glyphs) are dropped and whitespace is trimmed and collapsed (Chrome names a button with an icon before its label as the glyph, a space, then the label). A whole-name, case sensitive match, not a substring; the same rule as Playwright's `get_by_role(name=..., exact=True)`."
         },
         "maxNodes": {
           "type": "number",

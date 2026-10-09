@@ -234,12 +234,22 @@ function shapeNode(raw: RawAxNode): AxTreeNode | null {
 
 /** UTF-8 byte length, mirroring `packages/core/src/cdp/evaluate.ts`'s own `utf8ByteLength` (duplicated rather than shared: that module is not exported for reuse, and the two have no other reason to depend on each other). */
 /**
- * Trims and collapses every run of whitespace to one space, the same
- * normalisation Playwright applies to accessible names before comparing
- * them. Applied to both the requested name and Chrome's computed one.
+ * Drops Unicode private use characters, then trims and collapses every run
+ * of whitespace to one space (the whitespace rule Playwright applies to
+ * accessible names). Applied to both the requested name and Chrome's
+ * computed one.
+ *
+ * Private use characters are icon font glyphs. Chrome puts an icon's CSS
+ * `content` into the name, so the-internet's Login button, an `<i>` with a
+ * Font Awesome icon followed by the word, is named " Login" once the
+ * font has loaded. That character carries no meaning a caller could type,
+ * and leaving it in made `role=button[name="Login"]` miss.
  */
 export function normalizeAxName(name: string): string {
-  return name.replace(/\s+/g, ' ').trim();
+  return name
+    .replace(/[-\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** Chrome's answer when a `nodeId` or `backendNodeId` no longer names a node in the current document. */
@@ -303,9 +313,10 @@ export async function queryAccessibilityTree(
       else if (typeof doc.root?.nodeId === 'number') params['nodeId'] = doc.root.nodeId;
       if (req.role !== undefined) params['role'] = req.role;
       // No `accessibleName` here: Chrome matches it byte for byte, and the
-      // names it computes keep stray whitespace (the-internet's Login button
-      // is " Login", from an icon element and a space before the word). The
-      // name is matched below instead, whitespace normalised on both sides.
+      // names it computes keep stray whitespace and icon font glyphs
+      // (the-internet's Login button is an icon glyph, a space, then the
+      // word). The name is matched below instead, normalised on both sides
+      // by `normalizeAxName`.
       return (await bridge.send('Accessibility.queryAXTree', params, sessionId)) as {
         nodes?: RawAxNode[];
       };

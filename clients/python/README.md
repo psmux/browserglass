@@ -318,9 +318,10 @@ tree.total, tree.truncated          # the real count, and whether the reply was 
 `role=<role>` or `role=<role>[name="<exact name>"]` is a locator selector
 built on the same CDP call, so it composes with `resolve()`/`click()`/`fill()`
 like any other selector, and chains: `'div.form >> role=button'`.
-The name is compared whole and case sensitive after trimming and
-collapsing whitespace on both sides, so `name="Login"` matches a button
-Chrome names `" Login"`.
+The name is compared whole and case sensitive after whitespace is trimmed
+and collapsed and icon font glyphs (Unicode private use characters) are
+dropped on both sides, so `name="Login"` matches a button Chrome names as
+an icon glyph, a space, then "Login".
 Both need the `devtools` capability in addition to `evaluate`, checked
 locally so a caller missing it fails fast:
 

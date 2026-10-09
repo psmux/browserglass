@@ -143,7 +143,7 @@ describe('queryAccessibilityTree: which CDP commands go out', () => {
       axHandlers({
         'Accessibility.queryAXTree': () => ({
           // Chrome's real name for the-internet's Login button is " Login".
-          nodes: [named(' Login', 1), named('Log  in\n', 2), named('Logout', 3), named('login', 4)],
+          nodes: [named(' Login', 1), named('Log  in\n', 2), named('Logout', 3), named('login', 4)],
         }),
       }),
     );

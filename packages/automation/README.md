@@ -171,10 +171,11 @@ role and name, computed by Chrome's own accessibility engine
 (`Accessibility.queryAXTree`), not a `role` attribute lookalike: a
 `<button>` with no `role` attribute matches `role=button`, and an `<a>`
 with no `href` does not match `role=link`, because it genuinely is not a
-link. The name is compared whole and case sensitive, with whitespace
-trimmed and collapsed on both sides first, so `role=button[name="Login"]`
-matches a button Chrome names `" Login"` (an icon, then a space, then the
-word). `client.a11y()` reads the same tree directly, for an LLM agent that
+link. The name is compared whole and case sensitive, after whitespace is
+trimmed and collapsed and icon font glyphs (Unicode private use
+characters) are dropped on both sides. So `role=button[name="Login"]`
+matches a button whose name Chrome reports as an icon glyph, a space, then
+"Login". `client.a11y()` reads the same tree directly, for an LLM agent that
 wants the page's roles, names and actionable state without a selector at
 all. Both need `devtools` in addition to `evaluate`.
 
