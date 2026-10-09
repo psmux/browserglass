@@ -233,6 +233,12 @@ function shapeNode(raw: RawAxNode): AxTreeNode | null {
 }
 
 /** UTF-8 byte length, mirroring `packages/core/src/cdp/evaluate.ts`'s own `utf8ByteLength` (duplicated rather than shared: that module is not exported for reuse, and the two have no other reason to depend on each other). */
+/** Chrome's answer when a `nodeId` or `backendNodeId` no longer names a node in the current document. */
+function isStaleNodeError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /Could not find node with given id|No node with given id|No node found/i.test(message);
+}
+
 function utf8ByteLength(s: string): number {
   return new TextEncoder().encode(s).length;
 }
@@ -270,16 +276,35 @@ export async function queryAccessibilityTree(
 ): Promise<AxQueryOutcome> {
   await bridge.send('Accessibility.enable', undefined, sessionId);
   try {
-    const doc = (await bridge.send('DOM.getDocument', { depth: 0 }, sessionId)) as {
-      root?: { nodeId?: number };
+    // The root is addressed by `backendNodeId` when Chrome reports one. A
+    // `nodeId` is only valid until the document is replaced or anything
+    // else on the session calls `DOM.getDocument` again, and right after a
+    // navigation that window is real: a live `role=searchbox` on Wikipedia
+    // failed with "Could not find node with given id" this way. A
+    // `backendNodeId` does not have that lifetime problem. One retry still
+    // covers the case where the document itself was swapped between the
+    // two calls.
+    const queryOnce = async (): Promise<{ nodes?: RawAxNode[] }> => {
+      const doc = (await bridge.send('DOM.getDocument', { depth: 0 }, sessionId)) as {
+        root?: { nodeId?: number; backendNodeId?: number };
+      };
+      const params: Record<string, unknown> = {};
+      if (typeof doc.root?.backendNodeId === 'number')
+        params['backendNodeId'] = doc.root.backendNodeId;
+      else if (typeof doc.root?.nodeId === 'number') params['nodeId'] = doc.root.nodeId;
+      if (req.role !== undefined) params['role'] = req.role;
+      if (req.name !== undefined) params['accessibleName'] = req.name;
+      return (await bridge.send('Accessibility.queryAXTree', params, sessionId)) as {
+        nodes?: RawAxNode[];
+      };
     };
-    const params: Record<string, unknown> = {};
-    if (typeof doc.root?.nodeId === 'number') params['nodeId'] = doc.root.nodeId;
-    if (req.role !== undefined) params['role'] = req.role;
-    if (req.name !== undefined) params['accessibleName'] = req.name;
-    const raw = (await bridge.send('Accessibility.queryAXTree', params, sessionId)) as {
-      nodes?: RawAxNode[];
-    };
+    let raw: { nodes?: RawAxNode[] };
+    try {
+      raw = await queryOnce();
+    } catch (err) {
+      if (!isStaleNodeError(err)) throw err;
+      raw = await queryOnce();
+    }
     const shaped: AxTreeNode[] = [];
     for (const n of raw.nodes ?? []) {
       if (n.ignored === true) continue;

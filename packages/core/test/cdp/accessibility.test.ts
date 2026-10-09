@@ -144,6 +144,39 @@ describe('queryAccessibilityTree: which CDP commands go out', () => {
     expect(call?.params).toEqual({ nodeId: DOC_ROOT_NODE_ID });
   });
 
+  it('addresses the root by backendNodeId when Chrome reports one, since a nodeId can go stale', async () => {
+    const { bridge, sent } = fakeBridge(
+      axHandlers({
+        'DOM.getDocument': () => ({ root: { nodeId: DOC_ROOT_NODE_ID, backendNodeId: 7 } }),
+        'Accessibility.queryAXTree': () => ({ nodes: [] }),
+      }),
+    );
+    await queryAccessibilityTree(bridge, SESSION, {
+      role: 'searchbox',
+      maxNodes: 10,
+      maxResultBytes: 100000,
+    });
+    const call = sent.find((s) => s.method === 'Accessibility.queryAXTree');
+    expect(call?.params).toEqual({ backendNodeId: 7, role: 'searchbox' });
+  });
+
+  it('re-reads the document and queries once more when the root no longer exists', async () => {
+    const { bridge, sent } = fakeBridge(
+      axHandlers({
+        'Accessibility.queryAXTree': (_p, i) =>
+          i === 0 ? new Error('Could not find node with given id') : { nodes: [BUTTON_NODE] },
+      }),
+    );
+    const out = await queryAccessibilityTree(bridge, SESSION, {
+      role: 'button',
+      maxNodes: 10,
+      maxResultBytes: 100000,
+    });
+    expect(out.nodes).toHaveLength(1);
+    expect(sent.filter((s) => s.method === 'DOM.getDocument')).toHaveLength(2);
+    expect(sent.filter((s) => s.method === 'Accessibility.queryAXTree')).toHaveLength(2);
+  });
+
   it('still disables Accessibility when queryAXTree itself throws', async () => {
     const { bridge, sent } = fakeBridge(
       axHandlers({ 'Accessibility.queryAXTree': () => new Error('boom') }),
