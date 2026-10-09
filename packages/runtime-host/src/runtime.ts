@@ -36,6 +36,7 @@ import type { HostRuntimeConfig } from './config.js';
 import {
   cdpTimeoutError,
   foreignOwnerError,
+  noDisplayError,
   noValidLeaseError,
   profileLockedError,
   stealthArgDeniedError,
@@ -282,6 +283,18 @@ export class HostRuntime implements BrowserRuntime {
     // reason rather than accept `spec.stealth` and run nothing (see
     // `stealth.ts`'s own doc comment).
     const stealthProfile = resolveRequiredStealthProfile(this.config, req.spec);
+
+    // Headful Chrome on Linux with no display prints "Missing X server or
+    // $DISPLAY" and exits, which would otherwise surface 45 seconds later
+    // as a CDP timeout that says nothing about the cause.
+    if (
+      req.spec.headless === 'off' &&
+      platform() === 'linux' &&
+      !process.env['DISPLAY'] &&
+      !process.env['WAYLAND_DISPLAY']
+    ) {
+      throw noDisplayError();
+    }
 
     const resolved = await timed('preflight', () =>
       resolveChromeBinary(req.spec.channel, this.config.binaries),
