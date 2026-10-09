@@ -3416,6 +3416,10 @@ export class ManagedSession {
    * protection the capability model already provides properly.
    */
   async evaluate(targetId: string, req: EvaluateRequest): Promise<EvaluateOutcome> {
+    // Read after write: a click or keystroke sent just before this evaluate
+    // must reach the page first, or the evaluate reads the page as it was
+    // (a radio clicked and read back in the next call came back unchecked).
+    await this.session.inputSettled(targetId);
     const handle = await this.ensureAttached(targetId);
     if (!handle) {
       // `E_CDP_TARGET_NOT_FOUND` rather than a bare `Error`, so the wire
@@ -3517,6 +3521,8 @@ export class ManagedSession {
       readonly stamp: boolean;
     },
   ): Promise<{ nodes: AxTreeNode[]; total: number; truncated: boolean; marker: string | null }> {
+    // Same read after write ordering as `evaluate`.
+    await this.session.inputSettled(targetId);
     const handle = await this.ensureAttached(targetId);
     if (!handle) {
       throw new BglsError(

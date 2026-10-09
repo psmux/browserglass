@@ -1022,3 +1022,37 @@ describe('InputDispatcher: native drag (input.drag)', () => {
     });
   });
 });
+
+describe('InputDispatcher: settledFor', () => {
+  it('waits for Chrome to answer a streamed click, not just for it to be written', async () => {
+    const bridge = new FakeCdpSender();
+    bridge.delayMs = 60;
+    const { dispatcher } = makeDispatcher({ bridge, cdpDispatchRaceMs: 5 });
+
+    dispatcher.enqueue(
+      'vwr_alice',
+      baseMouse({ kind: 'down', button: 'left', buttons: 1, clickCount: 1 }),
+    );
+    dispatcher.enqueue(
+      'vwr_alice',
+      baseMouse({ kind: 'up', button: 'left', buttons: 0, clickCount: 1 }),
+    );
+
+    // The chain lets go as soon as both events are written...
+    await dispatcher.tailFor('tgt_1');
+    const tailAt = Date.now();
+    // ...but settledFor holds until both sends have been answered.
+    await dispatcher.settledFor('tgt_1');
+    expect(bridge.calls.filter((c) => c.method === 'Input.dispatchMouseEvent')).toHaveLength(2);
+    expect(Date.now() - tailAt).toBeGreaterThanOrEqual(40);
+  });
+
+  it('resolves at once for a target with nothing in flight, and after a failed send', async () => {
+    const bridge = new FakeCdpSender();
+    const { dispatcher } = makeDispatcher({ bridge });
+    await dispatcher.settledFor('tgt_never_used');
+    bridge.rejectNextFor = 'Input.dispatchMouseEvent';
+    dispatcher.enqueue('vwr_alice', baseMouse({ kind: 'move' }));
+    await expect(dispatcher.settledFor('tgt_1')).resolves.toBeUndefined();
+  });
+});
