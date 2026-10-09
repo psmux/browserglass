@@ -70,6 +70,8 @@ export interface DiskRecordingSinkOptions {
 export interface RecordingCompletion {
   readonly stoppedAtMs: number;
   readonly framesWritten: number;
+  /** Frames skipped because this sink was behind the stream. Optional so an older caller still type checks. */
+  readonly framesDropped?: number;
   readonly failed: boolean;
 }
 
@@ -120,6 +122,7 @@ export class DiskRecordingSink implements RecordingSink {
     const completion: Record<string, unknown> = {
       stoppedAtMs: opts.stoppedAtMs,
       framesWritten: opts.framesWritten,
+      ...(opts.framesDropped !== undefined ? { framesDropped: opts.framesDropped } : {}),
       failed: opts.failed,
       ...(opts.errorMessage !== undefined ? { errorMessage: opts.errorMessage } : {}),
     };

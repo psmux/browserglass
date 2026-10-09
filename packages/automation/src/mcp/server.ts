@@ -1691,7 +1691,7 @@ async function callRecording(
       const result = await client.stopRecording(recordingId);
       const summary = result.failed
         ? `Recording ${result.recordingId} stopped, but it had already degraded to a no-op after a write failure; ${result.framesWritten} frame(s) reached disk before that happened.`
-        : `Recording ${result.recordingId} stopped: ${result.framesWritten} frame(s) written. Read it back with "bgls record list"/"bgls record export".`;
+        : `Recording ${result.recordingId} stopped: ${result.framesWritten} frame(s) written${result.framesDropped ? `, ${result.framesDropped} dropped because disk writes fell behind` : ''}. Read it back with "bgls record list"/"bgls record export".`;
       return formatToolResult(summary, {
         ok: true,
         action: 'bg_recording',
@@ -1701,6 +1701,7 @@ async function callRecording(
         startedAtMs: result.startedAtMs,
         stoppedAtMs: result.stoppedAtMs,
         framesWritten: result.framesWritten,
+        ...(result.framesDropped !== undefined ? { framesDropped: result.framesDropped } : {}),
         failed: result.failed,
       });
     }

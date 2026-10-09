@@ -1125,6 +1125,7 @@ export class AutomationClient {
           startedAtMs: reply.startedAtMs,
           stoppedAtMs: reply.stoppedAtMs,
           framesWritten: reply.framesWritten,
+          ...(reply.framesDropped !== undefined ? { framesDropped: reply.framesDropped } : {}),
           failed: reply.failed,
         };
       },

@@ -1836,6 +1836,7 @@ export class Connection implements ConnectionSink {
           startedAtMs: summary.startedAtMs,
           stoppedAtMs: summary.stoppedAtMs ?? Date.now(),
           framesWritten: summary.framesWritten,
+          framesDropped: summary.framesDropped,
           failed: summary.failed,
         });
       } catch (err) {

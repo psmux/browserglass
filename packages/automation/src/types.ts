@@ -513,6 +513,8 @@ export interface StopRecordingResult {
   stoppedAtMs: number;
   /** How many frames actually reached the sink; see `RecordingStopped.framesWritten`'s own doc (attempted, not necessarily all durable if the process crashes mid write). */
   framesWritten: number;
+  /** Frames skipped because the gateway's disk writes fell behind the stream. Zero on a healthy recording. Absent from a gateway that predates the field. */
+  framesDropped?: number;
   /** True if the recording degraded to a no-op before this stop (a sink failure mid recording). `framesWritten` still counts whatever reached disk before that happened. */
   failed: boolean;
 }

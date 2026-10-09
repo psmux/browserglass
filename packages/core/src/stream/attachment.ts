@@ -253,7 +253,7 @@ export function fanOut(
       skipped += 1;
       continue;
     }
-    att.transport.send(tier.buffer);
+    att.transport.send(tier.buffer, frame.seq);
     att.onSent(frame.seq, tier.buffer.byteLength);
     sent += 1;
     const bucket = byTier[att.tierIndex];

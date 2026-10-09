@@ -108,6 +108,8 @@ export interface RecordingSummaryResult {
   readonly startedAtMs: number;
   readonly stoppedAtMs?: number;
   readonly framesWritten: number;
+  /** `FrameRecorder.framesDropped`: frames skipped because the sink was behind. */
+  readonly framesDropped: number;
   readonly failed: boolean;
 }
 
@@ -2012,6 +2014,7 @@ export class ManagedSession {
         .finalize({
           stoppedAtMs: rec.stoppedAtMs,
           framesWritten: rec.recorder.framesWritten,
+          framesDropped: rec.recorder.framesDropped,
           failed: rec.recorder.failed,
           ...(lastError
             ? { errorMessage: sanitizeMessage(redactServerPaths(lastError.message)) }
@@ -2051,6 +2054,7 @@ export class ManagedSession {
       startedAtMs: rec.startedAtMs,
       ...(rec.stoppedAtMs !== undefined ? { stoppedAtMs: rec.stoppedAtMs } : {}),
       framesWritten: rec.recorder.framesWritten,
+      framesDropped: rec.recorder.framesDropped,
       failed: rec.recorder.failed,
     };
   }

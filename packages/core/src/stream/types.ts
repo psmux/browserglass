@@ -134,7 +134,14 @@ export interface EncodeTierSet {
 export interface AttachmentTransport {
   isOpen(): boolean;
   bufferedAmount(): number;
-  send(buf: Uint8Array): void;
+  /**
+   * Sends one frame. `seq` is the seq of the frame these bytes belong to,
+   * the same value the caller passes to `Attachment.onSent` right after.
+   * A socket transport can ignore it (the seq is in the header already);
+   * a recorder needs it, because by the time an encode finishes the
+   * owning `Stream.seq` may already have moved on to a later frame.
+   */
+  send(buf: Uint8Array, seq?: number): void;
 }
 
 /** One frame-encode-and-send-fan-out's outcome. */
