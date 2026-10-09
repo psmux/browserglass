@@ -71,6 +71,7 @@ export class ProfileServicePortAdapter implements ProfileServicePort {
     instanceId: string;
     nodeId: string;
     ttlMs: number;
+    reclaimFromHolderInstanceId?: string;
   }): Promise<ProfileLeaseGrant> {
     const result = await this.service.leaseResolved({
       tenantId: req.tenantId,
@@ -79,6 +80,9 @@ export class ProfileServicePortAdapter implements ProfileServicePort {
       instanceId: req.instanceId,
       nodeId: req.nodeId,
       ttlMs: req.ttlMs,
+      ...(req.reclaimFromHolderInstanceId !== undefined
+        ? { reclaimFromHolderInstanceId: req.reclaimFromHolderInstanceId }
+        : {}),
     });
     if (result.kind !== 'leased') {
       throw profileErr('E_PROFILE_BUSY', 'lease() unexpectedly resolved to a reuse result', {

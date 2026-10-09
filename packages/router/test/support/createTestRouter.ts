@@ -33,6 +33,7 @@ export function createTestRouter(
     viewers?: LiveViewerPort;
     logger?: RouterLogger;
     attachCredentials?: AttachCredentialIssuer;
+    reachesPeerNodes?: boolean;
   },
 ): TestRouter {
   const store = (opts?.store as ReturnType<typeof createMockStore>) ?? createMockStore(clock);
@@ -71,6 +72,7 @@ export function createTestRouter(
     ...(opts?.viewers ? { viewers: opts.viewers } : {}),
     ...(opts?.logger ? { logger: opts.logger } : {}),
     ...(opts?.attachCredentials ? { attachCredentials: opts.attachCredentials } : {}),
+    ...(opts?.reachesPeerNodes !== undefined ? { reachesPeerNodes: opts.reachesPeerNodes } : {}),
   };
   const router = new BrowserRouter(options);
   return { router, store, nodes, profiles, audit, nodeRegistry };

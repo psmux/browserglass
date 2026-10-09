@@ -331,11 +331,59 @@ async function reattachSurvivors(
   runtime: BrowserRuntime,
   localNode: LocalNode,
   clock: Clock,
-): Promise<void> {
+): Promise<string[]> {
+  const adopted: string[] = [];
   for (const entry of await runtime.list()) {
     if (entry.status !== 'live') continue;
-    await adoptSurvivor(runtime, localNode, entry, clock);
+    if (await adoptSurvivor(runtime, localNode, entry, clock)) adopted.push(entry.instanceId);
   }
+  return adopted;
+}
+
+/**
+ * Points the store rows of browsers this process just adopted at this
+ * process's own node id.
+ *
+ * Adoption gives `LocalNode` a handle, but the row still names the node of
+ * the process that launched the browser. Without a configured
+ * `peer.nodeId` every boot mints a fresh id, so after a crash and restart
+ * the row named a node that no longer existed. Reuse by profile key then
+ * handed that row out, and the attach failed with "driven by node X, not
+ * this gateway" although this gateway was the one holding the browser.
+ *
+ * Only rows in `'live'` are moved, by a compare and set on that status,
+ * so a row something else changed in the meantime is left alone. Returns
+ * the ids it moved. Best effort per row: a failed write leaves the row as
+ * it was, which acquire then treats as owned by an unreachable node.
+ */
+export async function rehomeAdoptedRows(
+  store: Store,
+  nodeId: NodeId,
+  adoptedInstanceIds: readonly string[],
+  logger: Logger,
+): Promise<string[]> {
+  const moved: string[] = [];
+  if (adoptedInstanceIds.length === 0) return moved;
+  const wanted = new Set(adoptedInstanceIds);
+  for (const tenant of await store.listTenants().catch(() => [])) {
+    for (const id of wanted) {
+      const row = await store.getInstance(tenant.id, id).catch(() => null);
+      if (row === null) continue;
+      wanted.delete(id);
+      if (row.nodeId === nodeId) continue;
+      const ok = await store
+        .transitionInstance(tenant.id, id, ['live'], 'live', { nodeId })
+        .catch(() => false);
+      if (ok) {
+        moved.push(id);
+        logger.info(
+          { instanceId: id, fromNodeId: row.nodeId, nodeId },
+          'reconcile: an adopted browser now belongs to this node',
+        );
+      }
+    }
+  }
+  return moved;
 }
 
 /**
@@ -1341,7 +1389,8 @@ export async function buildRouterWiring(
   // a browser the very next call was about to reattach cleanly. Keeping
   // adoption first means the sweep only ever sees what adoption could not
   // account for, which is the only set it is entitled to judge.
-  await reattachSurvivors(runtime, localNode, clock);
+  const adoptedIds = await reattachSurvivors(runtime, localNode, clock);
+  await rehomeAdoptedRows(store, nodeId, adoptedIds, logger);
   const scope = orphanSweepScope(config);
   if (scope.warning !== null) logger.warn({ nodeId }, scope.warning);
   const orphanSweep = scheduleOrphanSweep({
@@ -1426,6 +1475,9 @@ export async function buildRouterWiring(
     audit: config.observability.auditSink ?? noopAuditSink,
     metrics: config.observability.metricsSink ?? noopMetricsSink,
     clock,
+    // A standalone gateway reaches no other node, so a row naming another
+    // node is never one it can hand out. See `BrowserRouterOptions`.
+    reachesPeerNodes: nodeTransport !== localTransport,
     ...(deps?.viewers !== undefined ? { viewers: deps.viewers } : {}),
     ...(deps?.tokens !== undefined
       ? { attachCredentials: attachCredentialIssuerFor(config, deps.tokens) }

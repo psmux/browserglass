@@ -176,6 +176,15 @@ export interface BrowserRouterOptions {
    * scheme) rather than resemble a working one.
    */
   attachCredentials?: AttachCredentialIssuer;
+  /**
+   * Whether `nodes` can reach any node other than this router's own. A
+   * standalone gateway (no peer link configured) cannot, so an instance
+   * row naming another node is one it can never hand out: that node is a
+   * previous run of this gateway, or a separate process sharing the store.
+   * Default `true`, in which case another node's row is servable while
+   * that node reads `ready` with a fresh heartbeat.
+   */
+  reachesPeerNodes?: boolean;
 }
 
 /** Deferred pair for a queued acquire's `ready` promise, resolved once `processQueue` places it. */
@@ -351,6 +360,7 @@ export class BrowserRouter {
   readonly config: RouterConfig;
   private readonly overridePolicy: OverridePolicy;
   private readonly viewers: LiveViewerPort;
+  private readonly reachesPeerNodes: boolean;
   private readonly logger: RouterLogger;
   private readonly attachCredentials: AttachCredentialIssuer | null;
 
@@ -422,6 +432,7 @@ export class BrowserRouter {
     this.config = { ...DEFAULT_ROUTER_CONFIG, ...opts.config };
     this.overridePolicy = opts.overridePolicy ?? STRICT_OVERRIDE_POLICY;
     this.viewers = opts.viewers ?? { countFor: () => 0 };
+    this.reachesPeerNodes = opts.reachesPeerNodes ?? true;
     this.logger = opts.logger ?? consoleWarnRouterLogger;
     this.attachCredentials = opts.attachCredentials ?? null;
     this.idempotency = new IdempotencyTable(opts.clock);
@@ -591,6 +602,42 @@ export class BrowserRouter {
         loadAvg1: snap.load.loadAvg1,
       },
     });
+  }
+
+  /**
+   * Whether this router can hand out `instance`: it lives on this router's
+   * own node, or on a peer this router can reach that is still alive
+   * (`ready`, heartbeat fresher than `nodeStaleMs`). See
+   * `FindReusableRequest.ownerServable` for the failure this prevents.
+   */
+  private async ownerServable(instance: Instance): Promise<boolean> {
+    if (instance.nodeId === null || instance.nodeId === this.nodeRegistry.id()) return true;
+    if (!this.reachesPeerNodes) return false;
+    const node = await this.store.getNode(instance.nodeId).catch(() => null);
+    if (node === null || node.state !== 'ready') return false;
+    return this.clock.now() - node.lastHeartbeatAt < this.config.nodeStaleMs;
+  }
+
+  /**
+   * Marks the row of an abandoned profile holder `failed` once a fresh
+   * launch has taken over its profile lease. Only reached on a standalone
+   * gateway (`reachesPeerNodes: false`) for a row naming another node,
+   * which by then has also lost its lease to the new instance, so nothing
+   * could serve it anyway. Best effort: the startup orphan sweep retires
+   * it later if this write fails.
+   */
+  private async retireAbandonedHolder(holder: Instance): Promise<void> {
+    const moved = await this.store
+      .transitionInstance(holder.tenantId, holder.id, [...LIVE_INSTANCE_STATUSES], 'failed', {
+        stateReason: 'owner_gone',
+      })
+      .catch(() => false);
+    if (moved) {
+      this.logger.warn(
+        { instanceId: holder.id, nodeId: holder.nodeId },
+        'acquire: retired an instance row owned by a node this gateway cannot reach; its profile went to a fresh launch',
+      );
+    }
   }
 
   /**
@@ -825,6 +872,7 @@ export class BrowserRouter {
       },
       clock: this.clock,
       store: this.store,
+      ownerServable: (instance) => this.ownerServable(instance),
     });
     if (reuse.kind === 'found') {
       this.audit.emit({
@@ -901,10 +949,19 @@ export class BrowserRouter {
       rejectedOverrides,
       timings,
       t0,
+      // A row left behind by a gateway that is gone still holds this
+      // profile's lease. Reclaim it now instead of answering
+      // E_PROFILE_BUSY until it expires; see `reclaimAbandonedHolder`.
+      ...(reuse.abandonedHolder !== undefined && !this.reachesPeerNodes
+        ? { reclaimFromHolder: reuse.abandonedHolder }
+        : {}),
     };
     try {
       const result = await this.placeAndLaunch(launchArgs);
       this.warmPool.recordAcquireArrival({ tenantId: principal.tenantId, poolId: pool.id });
+      if (launchArgs.reclaimFromHolder !== undefined) {
+        await this.retireAbandonedHolder(launchArgs.reclaimFromHolder);
+      }
       return result;
     } catch (e) {
       if (!isAdmissionRefusedError(e)) throw e;
@@ -1051,6 +1108,8 @@ export class BrowserRouter {
     rejectedOverrides: readonly { field: string; reason: string; policy: string }[];
     timings: AcquireResult['timings'];
     t0: number;
+    /** See `doAcquire`: an abandoned holder whose profile lease this launch may take over. */
+    reclaimFromHolder?: Instance;
   }): Promise<AcquireResult> {
     const sessionId = newId('sess');
     const nodeId = this.nodeRegistry.id();
@@ -1197,6 +1256,9 @@ export class BrowserRouter {
             instanceId: args.instanceId,
             nodeId: cand.nodeId,
             ttlMs: this.config.profileLeaseTtlMs,
+            ...(args.reclaimFromHolder !== undefined
+              ? { reclaimFromHolderInstanceId: args.reclaimFromHolder.id }
+              : {}),
           });
           args.timings.profileMs = this.clock.now() - profileStart;
 

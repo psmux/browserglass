@@ -550,6 +550,8 @@ export interface ProfileServicePort {
     instanceId: string;
     nodeId: string;
     ttlMs: number;
+    /** See `ProfileAcquireRequest.reclaimFromHolderInstanceId`. */
+    reclaimFromHolderInstanceId?: string;
   }): Promise<ProfileLeaseGrant>;
 
   /**
