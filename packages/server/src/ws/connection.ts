@@ -55,7 +55,11 @@ import type { ResolvedConfig } from '../config/types.js';
 import type { UploadStore } from '../files/upload-store.js';
 import type { HookRegistry } from '../hooks/dispatch.js';
 import type { ControlGrantedEvent, NavigationEvent, ViewerJoinedEvent } from '../hooks/types.js';
-import type { ManagedSession } from '../session/managed-session.js';
+import {
+  MAX_NAV_LOAD_TIMEOUT_MS,
+  type ManagedSession,
+  type NavigateWaitUntil,
+} from '../session/managed-session.js';
 import type { SessionRegistry } from '../session/registry.js';
 import type { ConnectionSink } from '../session/types.js';
 import { checkCapability } from '../wire/capability-check.js';
@@ -340,7 +344,12 @@ export class Connection implements ConnectionSink {
   private async runNav(
     msg: Record<string, unknown>,
     kind: 'goto' | 'back' | 'forward' | 'reload' | 'stop',
-    params: { readonly url?: string; readonly ignoreCache?: boolean },
+    params: {
+      readonly url?: string;
+      readonly ignoreCache?: boolean;
+      readonly waitUntil?: NavigateWaitUntil;
+      readonly timeoutMs?: number;
+    },
   ): Promise<void> {
     const targetId = str(msg['targetId']);
     // `onNavigation` only gates `'goto'`: a caller-named URL is the one
@@ -1496,7 +1505,33 @@ export class Connection implements ConnectionSink {
       );
     },
 
-    'nav.goto': async (msg) => this.runNav(msg, 'goto', { url: str(msg['url']) }),
+    'nav.goto': async (msg) => {
+      const waitUntil = msg['waitUntil'];
+      if (waitUntil !== undefined && waitUntil !== 'commit' && waitUntil !== 'load') {
+        this.replyTo(msg, {
+          t: 'error',
+          code: 'bgls.error.protocol.bad_envelope',
+          category: 'protocol',
+          message:
+            waitUntil === 'networkidle'
+              ? "nav.goto waitUntil 'networkidle' is not implemented by this gateway. Use 'load'."
+              : "nav.goto waitUntil must be 'commit' or 'load'.",
+          fatal: false,
+          retryable: false,
+        });
+        return;
+      }
+      const rawTimeout = msg['timeoutMs'];
+      const timeoutMs =
+        typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
+          ? Math.min(rawTimeout, MAX_NAV_LOAD_TIMEOUT_MS)
+          : undefined;
+      await this.runNav(msg, 'goto', {
+        url: str(msg['url']),
+        ...(waitUntil !== undefined ? { waitUntil } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      });
+    },
     'nav.back': async (msg) => this.runNav(msg, 'back', {}),
     'nav.forward': async (msg) => this.runNav(msg, 'forward', {}),
     'nav.reload': async (msg) =>

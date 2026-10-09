@@ -6,7 +6,21 @@ export interface NavGoto extends Envelope {
   targetId: string;
   url: string;
   referrer?: string;
+  /**
+   * When the correlated `nav.state` reply is sent. Default `'commit'`.
+   *
+   * * `'commit'`: as soon as the navigation commits. The page is usually
+   *   still loading (`loading: true`, often an empty `title`).
+   * * `'load'`: after the new document's `load` event, so the reply has the
+   *   loaded page's title and `loading: false`. A same-document navigation
+   *   (fragment only) answers at once. If `load` has not fired within
+   *   `timeoutMs` the reply is sent anyway with `loading: true`.
+   * * `'networkidle'`: reserved. The reference gateway refuses it with
+   *   `bgls.error.protocol.bad_envelope`.
+   */
   waitUntil?: 'commit' | 'load' | 'networkidle';
+  /** With `waitUntil: 'load'`: how long the server waits for the `load` event, ms. Default 30000, capped at 120000. A client's own request timeout must be longer than this. */
+  timeoutMs?: number;
 }
 
 /** C to S: navigate back in history. */

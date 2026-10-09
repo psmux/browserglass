@@ -693,11 +693,45 @@ class AutomationClient:
     # Navigation
     # ------------------------------------------------------------------
 
-    async def navigate(self, url: str, *, referrer: Optional[str] = None, wait_until: Optional[str] = None) -> StatusResult:
+    async def navigate(
+        self,
+        url: str,
+        *,
+        referrer: Optional[str] = None,
+        wait_until: str = "load",
+        timeout_ms: float = 30000,
+    ) -> StatusResult:
+        """Navigates :attr:`target_id` to ``url`` and returns once the page
+        has loaded, so reading the page straight after ``await
+        navigate(url)`` sees the new document (its real ``title``,
+        ``loading`` False).
+
+        ``wait_until`` picks when this returns:
+
+        * ``"load"`` (the default): after the new document's ``load``
+          event. If the page has not loaded within ``timeout_ms`` this
+          still returns, with ``loading`` True, rather than raising.
+        * ``"commit"``: as soon as the navigation commits, with the page
+          still loading (``loading`` True, usually an empty ``title``).
+        * ``"networkidle"``: not implemented by the gateway, which refuses
+          it.
+
+        Needs ``navigate`` and a held control lease.
+        """
+        payload: dict = {"targetId": self._target_id, "url": url, "waitUntil": wait_until}
+        if referrer is not None:
+            payload["referrer"] = referrer
+        if wait_until == "load":
+            payload["timeoutMs"] = timeout_ms
+
         async def fn() -> StatusResult:
+            # When waiting for load the gateway answers by timeout_ms at the
+            # latest; wait a little longer here so its honest loading=True
+            # reply wins over a client side TIMEOUT.
             reply = await self._core.request(
                 "nav.goto",
-                {"targetId": self._target_id, "url": url, **({"referrer": referrer} if referrer is not None else {}), **({"waitUntil": wait_until} if wait_until is not None else {})},
+                payload,
+                max(self._core.default_timeout_ms, timeout_ms + 5000) if wait_until == "load" else None,
             )
             return self._nav_state_to_status(reply)
 

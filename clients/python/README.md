@@ -155,7 +155,11 @@ options.
 * **Navigation**: `client.navigate()`, `client.go_back()`,
   `client.go_forward()`, `client.reload()`, `client.stop()`,
   `client.status()`, `client.wait_for_navigation()`,
-  `client.wait_for_network_idle()`.
+  `client.wait_for_network_idle()`. `navigate()` returns after the new
+  page's `load` event (`wait_until="load"`, the default), so the page can
+  be read on the next line; `wait_until="commit"` returns as soon as the
+  navigation commits. A page that has not loaded within `timeout_ms`
+  (default 30000) comes back with `loading` True instead of raising.
 * **Downloads**: `client.wait_for_download(timeout_ms=, trigger=)`. See
   "Downloads: `wait_for_download()`" below.
 * **Tabs**: `client.tabs.list()`, `client.tabs.open(url=, background=)`,

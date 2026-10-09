@@ -149,6 +149,24 @@ export interface FakeChromeServer {
   /** Sets what `Page.getLayoutMetrics` replies with as `cssLayoutViewport`. Unset (the default), the handler falls through to the catch-all `reply({})`, matching real Chrome's shape for a target whose metrics were never queried, and `queryRealViewport()` treats that as "unknown" the same way. */
   setLayoutViewport(clientWidth: number, clientHeight: number): void;
   /**
+   * Makes `Page.navigate` behave like a real cross-document navigation:
+   * it answers with `loaderId` (omit it to model a same-document
+   * navigation), then emits `Page.loadEventFired` on the same session after
+   * `loadEventDelayMs` (`null`: never). `Page.getNavigationHistory` then
+   * reports the navigated URL, with an empty title until the load event
+   * and `title` after it, which is how a real page's title arrives.
+   * `staleLoadFirst` emits one `Page.loadEventFired` BEFORE the navigate
+   * reply, standing in for the previous document finishing its own load.
+   * Unset (the default), `Page.navigate` and `Page.getNavigationHistory`
+   * fall through to the catch-all `reply({})` as before.
+   */
+  setNavigate(opts: {
+    readonly loaderId?: string;
+    readonly loadEventDelayMs: number | null;
+    readonly title: string;
+    readonly staleLoadFirst?: boolean;
+  }): void;
+  /**
    * Installs the responder for `Runtime.evaluate`, so a `page.evaluate`
    * test can script exactly the `RemoteObject`/`exceptionDetails` shape
    * real Chrome would send for a value, a live object, an unserializable
@@ -375,6 +393,13 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
         | undefined)
     | null = null;
   let layoutViewport: { clientWidth: number; clientHeight: number } | null = null;
+  let navigateBehavior: {
+    readonly loaderId?: string;
+    readonly loadEventDelayMs: number | null;
+    readonly title: string;
+    readonly staleLoadFirst?: boolean;
+  } | null = null;
+  let navHistory: { url: string; title: string } | null = null;
   const inputCalls: Array<{ method: string; params: Record<string, unknown> }> = [];
   const cdpCalls: Array<{
     method: string;
@@ -700,6 +725,34 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
         reply({ data: captureScreenshotBase64 });
         return;
       }
+      if (msg.method === 'Page.navigate' && navigateBehavior !== null) {
+        const b = navigateBehavior;
+        const sessionId = msg.sessionId;
+        const loadEvent = JSON.stringify({
+          method: 'Page.loadEventFired',
+          params: { timestamp: Date.now() / 1000 },
+          ...(sessionId ? { sessionId } : {}),
+        });
+        if (b.staleLoadFirst) ws.send(loadEvent);
+        const entry = { url: String(msg.params?.['url'] ?? ''), title: '' };
+        navHistory = entry;
+        reply(
+          b.loaderId !== undefined
+            ? { frameId: MAIN_FRAME_ID, loaderId: b.loaderId }
+            : { frameId: MAIN_FRAME_ID },
+        );
+        if (b.loadEventDelayMs !== null) {
+          setTimeout(() => {
+            entry.title = b.title;
+            ws.send(loadEvent);
+          }, b.loadEventDelayMs);
+        }
+        return;
+      }
+      if (msg.method === 'Page.getNavigationHistory' && navHistory !== null) {
+        reply({ currentIndex: 0, entries: [{ id: 1, ...navHistory }] });
+        return;
+      }
       if (msg.method === 'Page.printToPDF') {
         reply({ data: printToPdfBase64 });
         return;
@@ -795,6 +848,9 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
     },
     setPrintToPdf(base64Data) {
       printToPdfBase64 = base64Data;
+    },
+    setNavigate(opts) {
+      navigateBehavior = { ...opts };
     },
     setLayoutViewport(clientWidth, clientHeight) {
       layoutViewport = { clientWidth, clientHeight };

@@ -527,6 +527,21 @@ export interface RestartInstanceResult {
   streamsLost: number[];
 }
 
+/** Options for {@link AutomationClient.navigate}. */
+export interface NavigateOptions {
+  referrer?: string;
+  /**
+   * When `navigate()` resolves. Default `'load'`: after the new document's
+   * `load` event, so the page can be read straight away. `'commit'`
+   * resolves as soon as the navigation commits, with the page still
+   * loading. `'networkidle'` is declared on the wire but the gateway
+   * refuses it.
+   */
+  waitUntil?: 'commit' | 'load' | 'networkidle';
+  /** With `waitUntil: 'load'`: how long the gateway waits for `load` before answering with `loading: true`. Default 30000, capped at 120000 by the gateway. */
+  timeoutMs?: number;
+}
+
 /** Options for {@link AutomationClient.waitForNavigation}. */
 export interface WaitForNavigationOptions {
   /** Default `defaultTimeoutMs`. */

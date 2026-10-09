@@ -30,6 +30,14 @@ await lease.release();
 client.close();
 ```
 
+`navigate()` resolves after the new page's `load` event, so you can read
+the page (`status().title`, `evaluate()`, `resolve()`) on the next line.
+Pass `{ waitUntil: 'commit' }` to get the old behaviour, which resolves as
+soon as the navigation commits and the page is still loading. If a page
+never finishes loading within `timeoutMs` (default 30000), `navigate()`
+still resolves, with `loading: true`, so check that field when it matters.
+`'networkidle'` is not implemented yet and the gateway refuses it.
+
 ## Finding things on the page: `resolve` and the verbs on top of it
 
 There is no `Locator` object here, and there is not going to be one. Page

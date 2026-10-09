@@ -737,6 +737,15 @@ const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
  * fixed text plus the errno code: the underlying `fs` error, which embeds
  * the absolute server path, is logged and never forwarded.
  */
+/** `nav.goto`'s `waitUntil` values this server implements. `'networkidle'` is declared on the wire but refused by the handler (`ws/connection.ts`). */
+export type NavigateWaitUntil = 'commit' | 'load';
+
+/** How long `nav.goto` with `waitUntil: 'load'` waits for the load event when the request names no `timeoutMs`. Matches the 30s page load budget the rest of the stack uses (`@browserglass/core`'s `cdp/timeouts.ts`). */
+export const DEFAULT_NAV_LOAD_TIMEOUT_MS = 30_000;
+
+/** Upper bound on a caller supplied `nav.goto` `timeoutMs`. */
+export const MAX_NAV_LOAD_TIMEOUT_MS = 120_000;
+
 export class PdfStagingError extends Error {
   readonly code = 'E_PDF_STAGING_FAILED';
   readonly fsCode: string | undefined;
@@ -3044,23 +3053,21 @@ export class ManagedSession {
   async navigate(
     targetId: string,
     kind: 'goto' | 'back' | 'forward' | 'reload' | 'stop',
-    params: { readonly url?: string; readonly ignoreCache?: boolean },
+    params: {
+      readonly url?: string;
+      readonly ignoreCache?: boolean;
+      /** `goto` only. See {@link NavigateWaitUntil}. Default `'commit'`. */
+      readonly waitUntil?: NavigateWaitUntil;
+      /** `goto` with `waitUntil: 'load'` only: how long to wait for the load event before answering with `loading: true`. Default {@link DEFAULT_NAV_LOAD_TIMEOUT_MS}. */
+      readonly timeoutMs?: number;
+    },
   ): Promise<NavStatePayload | null> {
     const handle = await this.ensureAttached(targetId);
     if (!handle) throw new Error(`target ${targetId} has no live CDP session`);
     const sessionId = handle.id as never;
     switch (kind) {
-      case 'goto': {
-        const result = (await this.bridge.send(
-          'Page.navigate',
-          { url: params.url },
-          sessionId,
-        )) as { errorText?: string };
-        return await this.emitNavState(targetId, sessionId, {
-          loading: !result.errorText,
-          ...(result.errorText !== undefined ? { errorText: result.errorText } : {}),
-        });
-      }
+      case 'goto':
+        return await this.navigateGoto(targetId, sessionId, params);
       case 'back':
       case 'forward': {
         await this.ensurePageEnabled(sessionId);
@@ -3089,6 +3096,83 @@ export class ManagedSession {
       case 'stop':
         await this.bridge.send('Page.stopLoading', {}, sessionId);
         return await this.emitNavState(targetId, sessionId, { loading: false });
+    }
+  }
+
+  /**
+   * `nav.goto`. With `waitUntil: 'commit'` (the wire default) this answers
+   * as soon as `Page.navigate` returns, which is when the new document has
+   * committed and is still loading: `loading: true`, and usually an empty
+   * `title`. With `waitUntil: 'load'` it also waits for the new document's
+   * `Page.loadEventFired` (the page's `load` event), so the reply carries
+   * the loaded page's real title and `loading: false`.
+   *
+   * The listener goes on before `Page.navigate` is sent, so a fast page
+   * cannot fire `load` in the gap, and any `load` that arrives before
+   * `Page.navigate` has answered is ignored: that one belongs to whatever
+   * document was loading before. A navigation with no `loaderId` is
+   * same-document (a fragment change, a `pushState` URL): no new document,
+   * no `load` event, nothing to wait for. If the load event does not come
+   * within `timeoutMs` the reply is the honest current state with
+   * `loading: true`, never an invented `false`.
+   */
+  private async navigateGoto(
+    targetId: string,
+    sessionId: never,
+    params: {
+      readonly url?: string;
+      readonly waitUntil?: NavigateWaitUntil;
+      readonly timeoutMs?: number;
+    },
+  ): Promise<NavStatePayload | null> {
+    const waitForLoad = params.waitUntil === 'load';
+    let navigated = false;
+    let onLoad: (() => void) | undefined;
+    const loaded = new Promise<void>((resolve) => {
+      onLoad = resolve;
+    });
+    let unsubscribe: (() => void) | undefined;
+    if (waitForLoad) {
+      // `Page.loadEventFired` is only delivered with the Page domain on.
+      await this.ensurePageEnabled(sessionId);
+      unsubscribe = this.bridge.on(
+        'Page.loadEventFired',
+        () => {
+          if (navigated) onLoad?.();
+        },
+        sessionId,
+      );
+    }
+    try {
+      const result = (await this.bridge.send('Page.navigate', { url: params.url }, sessionId)) as {
+        errorText?: string;
+        loaderId?: string;
+      };
+      navigated = true;
+      if (result.errorText) {
+        return await this.emitNavState(targetId, sessionId, {
+          loading: false,
+          errorText: result.errorText,
+        });
+      }
+      if (!waitForLoad) {
+        return await this.emitNavState(targetId, sessionId, { loading: true });
+      }
+      if (result.loaderId === undefined) {
+        return await this.emitNavState(targetId, sessionId, { loading: false });
+      }
+      const timeoutMs = params.timeoutMs ?? DEFAULT_NAV_LOAD_TIMEOUT_MS;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timedOut = await Promise.race([
+        loaded.then(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(true), timeoutMs);
+        }),
+      ]);
+      if (timer !== undefined) clearTimeout(timer);
+      return await this.emitNavState(targetId, sessionId, { loading: timedOut });
+    } finally {
+      unsubscribe?.();
     }
   }
 

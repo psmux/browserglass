@@ -36,6 +36,20 @@ describe('AutomationClient', () => {
     const nav = await navPromise;
     expect(nav.url).toBe('https://example.test/page');
     expect(nav.loading).toBe(false);
+    // navigate() waits for load by default, so the page can be read
+    // straight after it resolves.
+    const gotoSent = gateway.ws.sentJsonMessages().find((m) => m['t'] === 'nav.goto');
+    expect(gotoSent).toMatchObject({ waitUntil: 'load', timeoutMs: 30000 });
+
+    const commitPromise = client.navigate('https://example.test/fast', { waitUntil: 'commit' });
+    await tick();
+    await commitPromise;
+    const commitSent = gateway.ws
+      .sentJsonMessages()
+      .filter((m) => m['t'] === 'nav.goto')
+      .at(-1);
+    expect(commitSent?.['waitUntil']).toBe('commit');
+    expect(commitSent?.['timeoutMs']).toBeUndefined();
 
     const clickPromise = client.clickAt(100, 200, { button: 'left' });
     await tick();

@@ -59,6 +59,7 @@ export type {
   Unsubscribe,
   UploadFileInput,
   WaitForFunctionOptions,
+  NavigateOptions,
   WaitForNavigationOptions,
   WaitForResumeOptions,
   WaitForTextOptions,
