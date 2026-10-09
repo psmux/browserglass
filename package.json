@@ -23,7 +23,7 @@
     "changeset": "changeset",
     "check:packed": "node scripts/check-packed-manifests.mjs",
     "bgls": "node packages/cli/dist/bin.mjs",
-    "build:plugins": "npm --prefix plugins/plugin-video-export install --no-audit --no-fund && npm --prefix plugins/plugin-video-export run build"
+    "build:plugins": "cd plugins/plugin-video-export && npm ci --no-audit --no-fund && npm run build"
   },
   "devDependencies": {
     "@arethetypeswrong/cli": "^0.18.5",
