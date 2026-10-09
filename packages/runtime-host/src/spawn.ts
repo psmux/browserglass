@@ -155,6 +155,47 @@ export async function killProcessTree(
   try {
     process.kill(-pid, signal);
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'ESRCH') throw err;
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return;
+    // macOS answers EPERM, not ESRCH, when every process left in the group
+    // has already exited and is only waiting to be reaped: a zombie has no
+    // credentials left to check a signal against. The terminate ladder hits
+    // this routinely, sending SIGKILL a second time to a group the first
+    // SIGKILL already finished off. A real permission failure leaves a
+    // live member in the group, so that one still throws.
+    if (code === 'EPERM' && !(await processGroupHasLiveMember(pid))) return;
+    throw err;
+  }
+}
+
+/** How long {@link processGroupHasLiveMember} waits for a dying group to finish exiting before calling a member live. */
+const GROUP_EXIT_SETTLE_MS = 1000;
+
+/**
+ * `true` when process group `pgid` still holds a member that is not a
+ * zombie. Polls briefly, since a member that was SIGKILLed a moment ago can
+ * still be mid exit when the EPERM arrives. A `ps` that cannot run at all
+ * answers `true`, so the caller rethrows rather than guessing the group is
+ * gone.
+ */
+async function processGroupHasLiveMember(pgid: number): Promise<boolean> {
+  const deadline = Date.now() + GROUP_EXIT_SETTLE_MS;
+  for (;;) {
+    let stdout: string;
+    try {
+      ({ stdout } = await execFileAsync('ps', ['-axo', 'pgid=,stat='], {
+        encoding: 'utf8',
+        timeout: 5000,
+        maxBuffer: 16 * 1024 * 1024,
+      }));
+    } catch {
+      return true;
+    }
+    const live = stdout.split('\n').some((line) => {
+      const match = /^\s*(\d+)\s+(\S+)/.exec(line);
+      return match !== null && Number(match[1]) === pgid && !match[2]?.startsWith('Z');
+    });
+    if (!live || Date.now() >= deadline) return live;
+    await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }

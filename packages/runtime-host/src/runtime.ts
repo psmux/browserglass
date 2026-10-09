@@ -49,7 +49,7 @@ import { listAllProfileDirs, reconcileOnStartup } from './reconcile.js';
 import { killProcessTree, resolveBrowserPid, spawnDetachedChrome } from './spawn.js';
 import type { StateFileEntry, StateFileStore } from './state-file.js';
 import { resolveRequiredStealthProfile, validateStealthProfiles } from './stealth.js';
-import { BrowserSupervisor } from './supervisor.js';
+import { BrowserSupervisor, StderrRingBuffer } from './supervisor.js';
 import { terminateBrowser } from './terminate.js';
 
 interface LiveEntry {
@@ -91,6 +91,9 @@ interface HandleMeta {
   headless: HeadlessMode;
   labels: Readonly<Record<string, string>>;
 }
+
+/** How much of a launching Chrome's stderr a failed launch quotes back. The tail is the part that names the reason. */
+const LAUNCH_STDERR_BYTES = 4096;
 
 /**
  * `@browserglass/runtime-host`'s `BrowserRuntime`. One instance per node
@@ -386,12 +389,40 @@ export class HostRuntime implements BrowserRuntime {
         deniedStealthArgs.map((d) => d.arg),
       );
     }
+    // Chrome's stderr and exit status while the launch is still in doubt.
+    // Without them a launch that never produces DevToolsActivePort fails
+    // with nothing but a path and a deadline, when Chrome usually printed
+    // exactly why it gave up. The supervisor takes over the buffer once the
+    // launch succeeds.
+    const launchStderr = new StderrRingBuffer(LAUNCH_STDERR_BYTES);
+    let launchSettled = false;
+    let earlyExit: string | null = null;
+    const launchFailureDetail = (err: unknown): string => {
+      const parts = [err instanceof Error ? err.message : String(err)];
+      if (earlyExit) parts.push(`chrome ${earlyExit}`);
+      const tail = launchStderr.contents.trim();
+      parts.push(tail ? `chrome stderr: ${tail}` : 'chrome wrote nothing to stderr');
+      return parts.join('; ');
+    };
     const { realPid, child } = await timed('spawn', async () => {
-      const spawned = spawnDetachedChrome({ binaryPath: resolved.path, args, env });
+      const spawned = spawnDetachedChrome({
+        binaryPath: resolved.path,
+        args,
+        env,
+        onStderr: (chunk) => {
+          if (!launchSettled) launchStderr.push(chunk);
+        },
+      });
+      spawned.child.once('exit', (code, signal) => {
+        earlyExit = signal ? `exited on ${signal}` : `exited with code ${code}`;
+      });
       this.currentlyLaunchingPids.add(spawned.spawnPid);
       try {
         const pid = await resolveBrowserPid(req.profile.path, req.deadlineAt);
         return { realPid: pid, child: spawned.child };
+      } catch (err) {
+        await killProcessTree(spawned.spawnPid, 'SIGKILL');
+        throw new Error(launchFailureDetail(err), { cause: err });
       } finally {
         this.currentlyLaunchingPids.delete(spawned.spawnPid);
       }
@@ -407,8 +438,9 @@ export class HostRuntime implements BrowserRuntime {
       identity = discovered.identity;
     } catch (err) {
       await killProcessTree(realPid, 'SIGKILL');
-      throw cdpTimeoutError(err instanceof Error ? err.message : String(err));
+      throw cdpTimeoutError(launchFailureDetail(err));
     }
+    launchSettled = true;
 
     const handle = await timed('postLaunch', () =>
       this.buildHandle({
@@ -435,6 +467,7 @@ export class HostRuntime implements BrowserRuntime {
         labels: req.labels,
       },
       child,
+      launchStderr.contents,
     );
     return handle;
   }
@@ -565,12 +598,14 @@ export class HostRuntime implements BrowserRuntime {
     handle: LaunchedBrowser,
     meta: HandleMeta,
     child?: ChildProcess,
+    launchStderr?: string,
   ): void {
     const exitListeners = new Set<(info: ExitInfo) => void>();
     const supervisor = new BrowserSupervisor({
       instanceId,
       pid: handle.pid as number,
       ...(child !== undefined ? { child } : {}),
+      ...(launchStderr ? { launchStderr } : {}),
       statsIntervalMs:
         this.config.supervisor?.statsIntervalMs ?? DEFAULT_SUPERVISOR_CONFIG.statsIntervalMs,
       unhealthyProbes:

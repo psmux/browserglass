@@ -55,6 +55,8 @@ export interface BrowserSupervisorOptions {
   pid: number;
   /** Present only for a freshly spawned (not adopted) browser; used only for best-effort stderr capture. */
   child?: ChildProcess | null;
+  /** Whatever stderr the launch already read off `child` before this supervisor existed, so the ring buffer and the GPU sniff still see Chrome's earliest lines. */
+  launchStderr?: string;
   statsIntervalMs: number;
   unhealthyProbes: number;
   onExit: (info: ExitInfo) => void;
@@ -84,14 +86,16 @@ export class BrowserSupervisor {
     this.instanceId = opts.instanceId;
     this.pid = opts.pid;
 
+    if (opts.launchStderr) this.pushStderr(opts.launchStderr);
     if (opts.child?.stderr) {
-      opts.child.stderr.on('data', (chunk: Buffer) => {
-        const text = chunk.toString('utf8');
-        this.stderrRing.push(text);
-        if (this.opts.onGpuInitFailure && this.stderrRing.looksLikeGpuInitFailure()) {
-          this.opts.onGpuInitFailure();
-        }
-      });
+      opts.child.stderr.on('data', (chunk: Buffer) => this.pushStderr(chunk.toString('utf8')));
+    }
+  }
+
+  private pushStderr(text: string): void {
+    this.stderrRing.push(text);
+    if (this.opts.onGpuInitFailure && this.stderrRing.looksLikeGpuInitFailure()) {
+      this.opts.onGpuInitFailure();
     }
   }
 

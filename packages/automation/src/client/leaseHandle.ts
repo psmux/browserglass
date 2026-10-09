@@ -1,4 +1,5 @@
-import type { ControlGranted } from '@browserglass/protocol';
+import type { ControlGranted, ErrorMsg } from '@browserglass/protocol';
+import { AutomationError } from '../errors.js';
 import type { ControlLeaseHandle, PreemptionRequest, RevokeReason } from '../types.js';
 import type { AutomationCore } from './core.js';
 
@@ -57,14 +58,51 @@ export class ControlLeaseHandleImpl implements ControlLeaseHandle {
     return () => this.revokedCbs.delete(cb);
   }
 
+  /**
+   * Asks the gateway to extend this lease and waits for the fresh
+   * `control.granted`.
+   *
+   * The gateway answers `control.renew` with a `control.granted` for this
+   * lease that carries no `re` (the lease engine's `renew()` emits it
+   * directly to the viewer, the same message any other grant uses). An
+   * earlier version waited only for a reply whose `re` matched the
+   * request id, so against a real gateway every renew timed out, the
+   * local `expiresAt` never moved, and every verb started failing with
+   * `LEASE_NOT_HELD` 30 seconds after `acquireControl()` even though the
+   * server had renewed the lease. The fake gateway in the tests did echo
+   * `re`, which hid it. So this accepts either: a reply correlated by
+   * `re`, or a `control.granted` naming this target and lease.
+   */
   async renew(ms?: number): Promise<void> {
     if (this.revoked) return;
-    const reply = await this.core.request<ControlGranted>('control.renew', {
-      targetId: this.targetId,
-      leaseId: this.leaseId,
-      ...(ms !== undefined ? { ttlMs: ms } : {}),
-    });
-    this._expiresAt = reply.expiresAt;
+    const id = this.core.newId();
+    let abandon: (() => void) | null = null;
+    const reply = this.core.awaitMessage<ControlGranted | ErrorMsg>(
+      (m) =>
+        m.re === id ||
+        (m.t === 'control.granted' &&
+          (m as ControlGranted).targetId === this.targetId &&
+          (m as ControlGranted).leaseId === this.leaseId),
+      this.core.defaultTimeoutMs,
+      (a) => {
+        abandon = a;
+      },
+    );
+    try {
+      this.core.send('control.renew', {
+        id,
+        targetId: this.targetId,
+        leaseId: this.leaseId,
+        ...(ms !== undefined ? { ttlMs: ms } : {}),
+      });
+    } catch (err) {
+      reply.catch(() => undefined);
+      (abandon as (() => void) | null)?.();
+      throw err;
+    }
+    const msg = await reply;
+    if (msg.t === 'error') throw AutomationError.fromErrorMsg(msg as ErrorMsg);
+    if (msg.t === 'control.granted') this._expiresAt = (msg as ControlGranted).expiresAt;
   }
 
   async release(): Promise<void> {

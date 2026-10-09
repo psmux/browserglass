@@ -58,8 +58,8 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import type { RecordedFrameEntry, RecordingMeta } from '@browserglass/core';
-import { decodeBinaryHeader } from '@browserglass/protocol';
 import type { EncodeRequest, EncodeResult, EncoderFrame } from '@browserglass/plugin-api';
+import { decodeBinaryHeader } from '@browserglass/protocol';
 import { defineCommand } from 'citty';
 import {
   GLOBAL_ARGS,

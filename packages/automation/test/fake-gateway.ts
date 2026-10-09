@@ -414,8 +414,17 @@ export class ScriptedGateway {
         break;
       }
       case 'control.renew': {
+        // The real gateway answers a renew with a fresh `control.granted`
+        // that carries NO `re`: the lease engine emits it directly to the
+        // viewer (`packages/core/src/control/lease-engine.ts`, `renew()`).
+        // This fake used to echo `re`, which is how a client that waited
+        // for a correlated reply passed here and lost every lease after 30
+        // seconds against a real gateway.
         if (id)
-          this.reply(id, 'control.granted', {
+          this.ws.simulateJson({
+            v: 1,
+            t: 'control.granted',
+            ts: Date.now(),
             targetId: msg['targetId'],
             leaseId: msg['leaseId'],
             expiresAt: Date.now() + ((msg['ttlMs'] as number) ?? 60000),

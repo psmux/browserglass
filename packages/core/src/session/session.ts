@@ -77,6 +77,9 @@ import { type Viewer, type ViewerOptions, createViewer } from './viewer.js';
 /** Allowed URL schemes for a best-effort URL restore (R3's blank-URL crash-budget step, and R4's own best-effort restore). Anything else is dropped in favour of `about:blank`. */
 const RESTORABLE_URL_SCHEMES: readonly string[] = ['http:', 'https:', 'about:'];
 
+/** How long `Session.createTarget()` waits for the CDP socket to drop after a failed `Target.createTarget` on a browser with no windows left, before treating the failure as real. Headful Chrome quits on its own once its last window closes, and on a slow machine that can take a few seconds. */
+const BROWSER_QUIT_GRACE_MS = 5000;
+
 function isRestorableUrl(url: string | null): boolean {
   if (!url) return false;
   if (url === 'about:blank') return true;
@@ -1224,22 +1227,70 @@ export class Session {
     readonly newWindow?: boolean;
   }): Promise<TargetRuntime> {
     if (this.bridge.state !== 'open') {
-      if (!this.relaunchInFlight) {
-        this.relaunchInFlight = this.restartInstance({
-          reason: 'target.new after the browser process exited',
-          preserveProfile: true,
-        }).finally(() => {
-          this.relaunchInFlight = null;
-        });
-      }
-      await this.relaunchInFlight;
+      await this.relaunchAfterBrowserExit();
       // Whether or not the relaunch actually succeeded, `this.registry` is
       // already Session's current one (unchanged if it failed, freshly
       // swapped in by `applyRebind` if it worked): let `create()` below
       // speak for itself, on the live-or-still-dead bridge, rather than
       // duplicating its own error handling here.
+      return this.registry.create(opts);
     }
+    if (this.registry.tabs().length > 0) return this.registry.create(opts);
+
+    // No windows left, but the socket is still up. Chrome may be in the
+    // middle of quitting after its last window closed: the WebSocket has
+    // not dropped yet, so the check above passes, and `Target.createTarget`
+    // reaches a browser that is already shutting down and answers "Failed
+    // to open a new tab". On a fast machine the socket is usually gone by
+    // the time the next `target.new` arrives; on a slow one (a CI runner)
+    // it often is not. So a failure here waits a short while to see
+    // whether the bridge drops, and if it does, relaunches and retries
+    // once. If the bridge stays open the failure was real and is rethrown.
+    const bridge = this.bridge;
+    try {
+      return await this.registry.create(opts);
+    } catch (err) {
+      if (!(await this.bridgeLeavesOpenWithin(bridge, BROWSER_QUIT_GRACE_MS))) throw err;
+    }
+    await this.relaunchAfterBrowserExit();
     return this.registry.create(opts);
+  }
+
+  /** Runs, or joins, {@link createTarget}'s single relaunch. See that method's doc for why this gate is separate from `restartInstance()`'s own. */
+  private relaunchAfterBrowserExit(): Promise<boolean> {
+    if (!this.relaunchInFlight) {
+      this.relaunchInFlight = this.restartInstance({
+        reason: 'target.new after the browser process exited',
+        preserveProfile: true,
+      }).finally(() => {
+        this.relaunchInFlight = null;
+      });
+    }
+    return this.relaunchInFlight;
+  }
+
+  /** Resolves `true` as soon as `bridge` is no longer `'open'` (dropped and reconnecting, or closed), or `false` if it is still open after `ms`. */
+  private bridgeLeavesOpenWithin(bridge: CdpBridge, ms: number): Promise<boolean> {
+    if (bridge.state !== 'open') return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const unsubs: Unsubscribe[] = [];
+      const finish = (left: boolean): void => {
+        if (settled) return;
+        settled = true;
+        this.clock.clearTimer(timer);
+        for (const unsub of unsubs) unsub();
+        resolve(left);
+      };
+      const check = (): void => {
+        if (bridge.state !== 'open') finish(true);
+      };
+      const timer = this.clock.setTimer(() => finish(bridge.state !== 'open'), ms);
+      // A dropped socket announces itself with `bridge.error` the moment
+      // the bridge moves to `'reconnecting'`, and with `bridge.close` once
+      // it gives up for good. Either one is enough.
+      unsubs.push(bridge.onBridge('bridge.error', check), bridge.onBridge('bridge.close', check));
+    });
   }
 
   /**
