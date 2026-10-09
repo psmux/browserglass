@@ -139,7 +139,7 @@ node examples/showcase/mcp-agent.mjs
 
 ## Take a typing test, key by key
 
-<sub>monkeytype.com · Games and real time</sub>
+<sub>typings.gg · Games and real time</sub>
 
 ![Take a typing test, key by key](media/showcase/typing-test.gif)
 
@@ -161,3 +161,14 @@ Plays a round with arrow key presses and reads the score off the page as it goes
 node examples/showcase/play-2048.mjs
 ```
 
+## Block images and CSS, crawl 2.3x faster
+
+<sub>books.toscrape.com · Data extraction</sub>
+
+![Block images and CSS](media/showcase/block-images.gif)
+
+Loads the same catalog page twice, once normally and once with request gate rules that deny images and stylesheets, and compares load time and bytes from the page's own Performance API. On the recorded run: 2.57 s and 332 KB normally, 1.12 s and 75 KB blocked.
+
+```sh
+node examples/showcase/block-images.mjs
+```

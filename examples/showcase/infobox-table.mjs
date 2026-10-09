@@ -25,7 +25,8 @@ async function readInfobox(browser) {
         .replace(/\[[^\]]*\]/g, '')
         .replace(/\s+/g, ' ')
         .split(';')[0]
-        .trim();
+        .trim()
+        .replace(/,$/, '');
     const row = (label) => {
       const th = [...document.querySelectorAll('table.infobox tr > th')].find(
         (h) => h.textContent.replace(/\s+/g, ' ').trim() === label,
@@ -34,7 +35,9 @@ async function readInfobox(browser) {
       const td = th.parentElement.querySelector('td');
       // Lists of designers are <li> items or <br> separated; join with commas.
       const parts = [...td.querySelectorAll('li')].map((li) => clean(li.innerText));
-      return (parts.length ? parts : td.innerText.split('\n').map(clean)).filter(Boolean).join(', ');
+      return (parts.length ? parts : td.innerText.split('\n').map(clean))
+        .filter(Boolean)
+        .join(', ');
     };
     // Rust's infobox has no "Designed by" row, only "Developer"; fall back to it.
     const designer = row('Designed by') ? 'Designed by' : 'Developer';
@@ -104,20 +107,20 @@ try {
     await browser.evaluate((data) => {
       document.title = 'Collected infobox data';
       document.body.style.cssText =
-        'margin:0;padding:48px 64px;background:#f6f8fa;font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#1f2328';
+        'margin:0;padding:56px 64px;background:#f6f8fa;font:22px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#1f2328';
       const h = document.createElement('h1');
       h.textContent = 'Programming languages, from Wikipedia infoboxes';
-      h.style.cssText = 'font-size:26px;margin:0 0 24px';
+      h.style.cssText = 'font-size:34px;margin:0 0 28px';
       const table = document.createElement('table');
       table.style.cssText =
-        'border-collapse:collapse;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.12);border-radius:8px;overflow:hidden;min-width:900px';
+        'border-collapse:collapse;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.12);border-radius:8px;overflow:hidden;width:100%';
       const head = ['Language', 'First appeared', 'Designed by'];
       const tr = (cells, th) => {
         const r = document.createElement('tr');
         for (const c of cells) {
           const cell = document.createElement(th ? 'th' : 'td');
           cell.textContent = c;
-          cell.style.cssText = `text-align:left;padding:14px 20px;border-bottom:1px solid #d0d7de;${th ? 'background:#7c3aed;color:#fff;font-weight:600' : ''}`;
+          cell.style.cssText = `text-align:left;padding:16px 24px;font-size:22px;border-bottom:1px solid #d0d7de;${th ? 'background:#7c3aed;color:#fff;font-weight:600' : ''}`;
           r.appendChild(cell);
         }
         return r;
@@ -131,7 +134,11 @@ try {
     await sleep(1500);
   });
 } finally {
-  await browser.release();
+  // On a busy machine ending the browser can fail (E_TERMINATE_FAILED); say
+  // so, but still write out the data that was collected.
+  await browser
+    .release()
+    .catch((err) => console.error(`could not end the browser: ${err.message}`));
 }
 
 const esc = (v) => `"${String(v).replaceAll('"', '""')}"`;

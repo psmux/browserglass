@@ -72,7 +72,11 @@ try {
     await sleep(1200);
   });
 } finally {
-  await browser.release();
+  // On a busy machine ending the browser can fail (E_TERMINATE_FAILED); say
+  // so, but still write out the data that was collected.
+  await browser
+    .release()
+    .catch((err) => console.error(`could not end the browser: ${err.message}`));
 }
 
 const esc = (v) => `"${String(v).replaceAll('"', '""')}"`;
