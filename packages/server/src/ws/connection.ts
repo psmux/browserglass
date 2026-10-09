@@ -215,6 +215,9 @@ function declaresViewOnly(hello: Hello): boolean {
 }
 
 /** One viewer socket's live `bgls.v1` loop. Implements `ConnectionSink` so `ManagedSession` can push to it directly. */
+/** How many outbound envelopes a connection holds while its welcome is still being built. */
+const MAX_HELD_BEFORE_WELCOME = 256;
+
 export class Connection implements ConnectionSink {
   viewerId = '';
 
@@ -301,6 +304,34 @@ export class Connection implements ConnectionSink {
    */
   sendEnvelope<T extends { readonly t: string }>(env: T): void {
     if (!this.isOpen()) return;
+    // `welcome` must be the first envelope a viewer sees. The connection is
+    // attached to its session before `buildWelcome()` finishes awaiting, so
+    // a broadcast in that window (another viewer leaving, a lease change)
+    // would otherwise arrive first and break clients that wait for welcome.
+    // Hold those until welcome is out; errors and goodbye still go now,
+    // since a refused handshake never gets a welcome at all.
+    if (!this.welcomeSent) {
+      const kind = (env as { readonly t: string }).t;
+      if (kind === 'welcome') {
+        this.welcomeSent = true;
+        this.writeEnvelope(env);
+        const held = this.heldBeforeWelcome.splice(0);
+        for (const h of held) this.sendEnvelope(h);
+        return;
+      }
+      if (kind !== 'error' && kind !== 'goodbye') {
+        if (this.heldBeforeWelcome.length < MAX_HELD_BEFORE_WELCOME)
+          this.heldBeforeWelcome.push(env);
+        return;
+      }
+    }
+    this.writeEnvelope(env);
+  }
+
+  private welcomeSent = false;
+  private readonly heldBeforeWelcome: Array<{ readonly t: string }> = [];
+
+  private writeEnvelope<T extends { readonly t: string }>(env: T): void {
     const diagBucket = diagnosticsBucketFor((env as { readonly t: string }).t);
     if (diagBucket) {
       const targetId = (env as { readonly targetId?: unknown }).targetId;
