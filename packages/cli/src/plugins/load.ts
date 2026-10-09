@@ -411,11 +411,13 @@ export async function loadPlugin(
       const mod = (await import(/* @vite-ignore */ fileUrl)) as { default?: unknown };
       imported = mod.default;
     } catch (err) {
+      console.error('BGLSDEBUG import failed', absPath, pathToFileURL(absPath).href, err);
       return { status: 'load-failed', reason: `"${entry.id}" did not load (${errorMessage(err)})` };
     }
 
     const validated = validatePluginManifest(imported);
     if (!validated.ok) {
+      console.error('BGLSDEBUG validate failed', absPath, validated.reason);
       return {
         status: 'load-failed',
         reason: `"${entry.id}"'s default export is not a valid plugin: ${validated.reason}`,
@@ -470,6 +472,7 @@ export async function loadPlugin(
       ? { status: 'ready', plugin: manifest, probe }
       : { status: 'unusable', plugin: manifest, probe };
   } catch (err) {
+    console.error('BGLSDEBUG unexpected', err);
     // Lifecycle step 7: anything thrown at any step becomes a reported
     // result, never a crash. Every branch above already returns rather
     // than throws; this is the backstop for whatever this function's
