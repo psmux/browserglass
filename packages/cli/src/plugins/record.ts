@@ -7,9 +7,9 @@
  *
  * WHY the record is treated as untrusted on read even though this process
  * is usually the one that wrote it: a file on disk can be edited by
- * anything with write access to it, and `bgls-plugins.json` is meant to be
- * committed to a repository (at the root of the operator's project), so it can equally have been hand edited, merged
- * badly, or tampered with between commits. The same reasoning
+ * anything with write access to it, and `bgls-plugins.json` (which lives
+ * under the data directory, {@link defaultPluginsFilePath}) can equally
+ * have been hand edited, copied between machines, or tampered with. The same reasoning
  * `@browserglass/plugin-api`'s `validate.ts` gives for a plugin's own
  * manifest applies here one layer up: "the host validates the object it
  * actually got rather than casting a type onto it". A record whose
@@ -278,9 +278,35 @@ export function writePluginsFile(path: string, file: PluginsFile): void {
   writeFileSync(path, `${JSON.stringify(file, null, 2)}\n`, 'utf8');
 }
 
-/** Absolute path to `bgls-plugins.json` under `cwd` (default `process.cwd()`), matching the project-root convention. */
-export function defaultPluginsFilePath(cwd: string = process.cwd()): string {
+/**
+ * Absolute path to `bgls-plugins.json` under `dataDir`, beside the plugin
+ * files it names (`<dataDir>/plugins/...`) and every other piece of local
+ * state. It used to live in the current working directory, which put a
+ * machine specific file (a `local` source records an absolute path) at
+ * the root of whatever repository `bgls plugins add` happened to run in.
+ */
+export function defaultPluginsFilePath(dataDir: string): string {
+  return join(dataDir, PLUGINS_FILENAME);
+}
+
+/** Where `bgls-plugins.json` was written before it moved under the data directory: the current working directory. Read only, as a fallback. */
+export function legacyPluginsFilePath(cwd: string = process.cwd()): string {
   return join(cwd, PLUGINS_FILENAME);
+}
+
+/**
+ * The record a reader should use when no explicit `--file` was given: the
+ * one under `dataDir` when it exists, otherwise a legacy one in `cwd` when
+ * that exists, otherwise the `dataDir` path (which then reads as the empty
+ * record). Writers always write {@link defaultPluginsFilePath}; once they
+ * have, the new file shadows the legacy one for every reader.
+ */
+export function resolvePluginsFileForRead(dataDir: string, cwd: string = process.cwd()): string {
+  const current = defaultPluginsFilePath(dataDir);
+  if (existsSync(current)) return current;
+  const legacy = legacyPluginsFilePath(cwd);
+  if (existsSync(legacy)) return legacy;
+  return current;
 }
 
 /** Finds the entry with this `id`, or `undefined`. Ids are unique within a valid {@link PluginsFile} ({@link validatePluginsFile} refuses a duplicate). */

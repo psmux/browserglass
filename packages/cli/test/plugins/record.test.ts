@@ -6,9 +6,11 @@ import {
   EMPTY_PLUGINS_FILE,
   type PluginRecordEntry,
   type PluginsFile,
+  defaultPluginsFilePath,
   findPluginEntry,
   readPluginsFile,
   removePluginEntry,
+  resolvePluginsFileForRead,
   upsertPluginEntry,
   validatePluginsFile,
   writePluginsFile,
@@ -242,5 +244,28 @@ describe('findPluginEntry / upsertPluginEntry / removePluginEntry', () => {
     const updated = removePluginEntry(original, encoderEntry.id);
     expect(original.plugins).toHaveLength(2);
     expect(updated.plugins).toEqual([assistEntry]);
+  });
+});
+
+describe('plugins file location', () => {
+  function tempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'bgls-plugins-where-'));
+    dirs.push(dir);
+    return dir;
+  }
+
+  it('defaults to <dataDir>/bgls-plugins.json', () => {
+    const dataDir = tempDir();
+    expect(defaultPluginsFilePath(dataDir)).toBe(join(dataDir, 'bgls-plugins.json'));
+  });
+
+  it('reads the data dir copy first, then a legacy copy in cwd, then the data dir path', () => {
+    const dataDir = tempDir();
+    const cwd = tempDir();
+    expect(resolvePluginsFileForRead(dataDir, cwd)).toBe(join(dataDir, 'bgls-plugins.json'));
+    writeFileSync(join(cwd, 'bgls-plugins.json'), '{"version":1,"plugins":[]}');
+    expect(resolvePluginsFileForRead(dataDir, cwd)).toBe(join(cwd, 'bgls-plugins.json'));
+    writeFileSync(join(dataDir, 'bgls-plugins.json'), '{"version":1,"plugins":[]}');
+    expect(resolvePluginsFileForRead(dataDir, cwd)).toBe(join(dataDir, 'bgls-plugins.json'));
   });
 });

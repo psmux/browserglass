@@ -1,8 +1,16 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { runPluginsAdd, runPluginsList, runPluginsRemove } from '../../src/commands/plugins-cmd.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  pluginsAddCommand,
+  pluginsListCommand,
+  pluginsRemoveCommand,
+  runPluginsAdd,
+  runPluginsList,
+  runPluginsRemove,
+} from '../../src/commands/plugins-cmd.js';
 import { type PluginsFile, readPluginsFile, writePluginsFile } from '../../src/plugins/record.js';
 import { EXIT_CODES } from '../../src/util/exit.js';
 import { Printer } from '../../src/util/output.js';
@@ -299,5 +307,66 @@ describe('bgls plugins remove', () => {
     const read = readPluginsFile(filePath);
     expect(read.ok).toBe(true);
     if (read.ok) expect(read.file.plugins).toHaveLength(1);
+  });
+});
+
+describe('where bgls-plugins.json lives when --file is not given', () => {
+  it('add writes it under --data-dir, never into the current directory', async () => {
+    const srcDir = buildLocalPluginSourceDir({
+      id: 'bgls-plugin-where-fixture',
+      kind: 'frame-encoder',
+    });
+    const dataDir = freshDataDir();
+    const cwd = track(mkdtempSync(join(tmpdir(), 'bgls-plugins-cmd-cwd-')));
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+    const io = captureStdio();
+    try {
+      await pluginsAddCommand.run!({
+        args: { source: srcDir, 'data-dir': dataDir, json: true },
+      } as never);
+    } finally {
+      io.restore();
+      cwdSpy.mockRestore();
+    }
+    expect(existsSync(join(dataDir, 'bgls-plugins.json'))).toBe(true);
+    expect(existsSync(join(cwd, 'bgls-plugins.json'))).toBe(false);
+
+    // list and remove find it in the same place.
+    const io2 = captureStdio();
+    await pluginsListCommand.run!({ args: { 'data-dir': dataDir, json: true } } as never);
+    io2.restore();
+    const listed = parseJsonLines(io2.stdout)[0] as { plugins: Array<{ id: string }> };
+    expect(listed.plugins.map((p) => p.id)).toEqual(['bgls-plugin-where-fixture']);
+
+    const io3 = captureStdio();
+    await pluginsRemoveCommand.run!({
+      args: { id: 'bgls-plugin-where-fixture', 'data-dir': dataDir, json: true },
+    } as never);
+    io3.restore();
+    const read = readPluginsFile(join(dataDir, 'bgls-plugins.json'));
+    expect(read.ok && read.file.plugins.length).toBe(0);
+  });
+
+  it('list still reads a legacy ./bgls-plugins.json when the data dir has none', async () => {
+    const dataDir = freshDataDir();
+    const cwd = track(mkdtempSync(join(tmpdir(), 'bgls-plugins-cmd-cwd-')));
+    const entry = writeFixturePlugin(dataDir, {
+      id: 'bgls-plugin-legacy-fixture',
+      kind: 'frame-encoder',
+    });
+    writePluginsFile(join(cwd, 'bgls-plugins.json'), {
+      version: 1,
+      plugins: [entry],
+    } as PluginsFile);
+    const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(cwd);
+    const io = captureStdio();
+    try {
+      await pluginsListCommand.run!({ args: { 'data-dir': dataDir, json: true } } as never);
+    } finally {
+      io.restore();
+      cwdSpy.mockRestore();
+    }
+    const listed = parseJsonLines(io.stdout)[0] as { plugins: Array<{ id: string }> };
+    expect(listed.plugins.map((p) => p.id)).toEqual(['bgls-plugin-legacy-fixture']);
   });
 });
