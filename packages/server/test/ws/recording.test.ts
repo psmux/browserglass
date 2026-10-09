@@ -185,6 +185,39 @@ describe('recording.start / .stop / .list: real disk output', () => {
     ws.close();
   });
 
+  it('recording.started is not sent until the first frame has reached the recorder, retrying a failed forced capture', async () => {
+    gw = await startTestGateway();
+    gw.addTarget({
+      targetId: 'cdp-a',
+      type: 'page',
+      title: 'A',
+      url: 'https://a.example',
+      attached: false,
+    });
+    const { ws, targetId } = await connectWithCaps(gw, ['view', 'capture', 'download']);
+    // The fake page never paints on its own, so without a forced capture
+    // there would be no frame at all. Fail the first two forced captures.
+    gw.chrome.failNextCaptureScreenshots(2);
+    const callsBefore = gw.chrome.captureScreenshotCalls;
+
+    ws.send(JSON.stringify({ v: 1, t: 'recording.start', ts: Date.now(), targetId }));
+    const started = await nextMessageSkipping(ws, ['presence.state']);
+    expect(started['t']).toBe('recording.started');
+    const recordingId = started['recordingId'] as string;
+    expect(gw.chrome.captureScreenshotCalls - callsBefore).toBeGreaterThanOrEqual(3);
+
+    // No polling: the summary straight after the reply already counts it.
+    ws.send(JSON.stringify({ v: 1, t: 'recording.list', ts: Date.now() }));
+    const listed = await nextMessageSkipping(ws, ['presence.state', 'stream.stats']);
+    const rec = (listed['recordings'] as Array<Record<string, unknown>>).find(
+      (r) => r['recordingId'] === recordingId,
+    );
+    expect(rec?.['framesWritten'] as number).toBeGreaterThanOrEqual(1);
+    expect(rec?.['framesDropped']).toBe(0);
+
+    ws.close();
+  });
+
   it('recording.stop on an unknown recordingId is refused, not silently accepted', async () => {
     gw = await startTestGateway();
     gw.addTarget({

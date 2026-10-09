@@ -548,6 +548,14 @@ interface TargetTierState {
 const ENCODE_SAMPLE_CAP = 64;
 
 /**
+ * How long `startRecording()` waits for the recorder to be handed its first
+ * frame before returning anyway. Long enough for a forced capture on a
+ * loaded machine, short enough that a target that cannot produce a frame
+ * at all only delays `recording.start` by this much.
+ */
+const FIRST_RECORDED_FRAME_WAIT_MS = 2_000;
+
+/**
  * How long {@link ManagedSession.promoteOnInput} refuses to RE-promote a
  * target it promoted very recently. See that method's doc for the full
  * reasoning; the short version is that two viewers driving two tabs of one
@@ -1977,9 +1985,48 @@ export class ManagedSession {
     // A recording started against a static page would otherwise capture
     // nothing until the page next changes (screencast is change-driven);
     // mirrors `subscribe()`'s own identical fix immediately above.
-    await handle.forceFrame().catch(() => false);
+    //
+    // Then wait, bounded, for that frame to get through the encode queue
+    // to this recorder, so frame 1 is on its way to disk by the time the
+    // caller is told the recording has started. Without the wait the
+    // opening of a recording was lost whenever the forced frame failed
+    // (a capture source still starting) or sat behind queued frames: the
+    // first frame then came from the next screencast frame, which on a
+    // quiet page can be seconds away.
+    await this.captureFirstRecordedFrame(state, handle, recorder);
 
     return this.recordingSummary(recordingId);
+  }
+
+  /**
+   * Forces a frame for a just started recording and waits until the
+   * recorder has been handed one, retrying the forced capture while the
+   * target's capture source is still starting. Gives up quietly after
+   * {@link FIRST_RECORDED_FRAME_WAIT_MS}: a slow first frame must not turn
+   * `recording.start` into an error.
+   */
+  private async captureFirstRecordedFrame(
+    state: TargetTierState,
+    handle: { readonly forceFrame: () => Promise<boolean> },
+    recorder: FrameRecorder,
+  ): Promise<void> {
+    const deadline = monotonicNow() + FIRST_RECORDED_FRAME_WAIT_MS;
+    const pause = (ms: number) =>
+      new Promise<void>((resolve) => {
+        const t = setTimeout(resolve, Math.max(0, ms));
+        t.unref?.();
+      });
+    while (recorder.framesWritten === 0 && !recorder.failed) {
+      const forced = await handle.forceFrame().catch(() => false);
+      // The forced frame was queued on `state.chain` synchronously, inside
+      // `forceFrame()`, so awaiting the chain covers its fan-out.
+      const remaining = deadline - monotonicNow();
+      if (remaining <= 0) return;
+      await Promise.race([state.chain, pause(remaining)]);
+      if (recorder.framesWritten > 0 || monotonicNow() >= deadline) return;
+      if (!forced) await pause(Math.min(100, deadline - monotonicNow()));
+      if (monotonicNow() >= deadline) return;
+    }
   }
 
   /**

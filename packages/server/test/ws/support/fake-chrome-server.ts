@@ -144,6 +144,10 @@ export interface FakeChromeServer {
   ): void;
   /** Overrides what `Page.captureScreenshot` replies with (default {@link ONE_PX_JPEG_BASE64}). Lets a test control the encoded bytes `ManagedSession.capture()` decodes dimensions out of. */
   setCaptureScreenshot(base64Data: string): void;
+  /** Makes the next `count` `Page.captureScreenshot` calls fail with a CDP error, the way a capture against a page that is still starting up can. */
+  failNextCaptureScreenshots(count: number): void;
+  /** How many `Page.captureScreenshot` calls this server has answered or failed so far. */
+  readonly captureScreenshotCalls: number;
   /** Overrides what `Page.printToPDF` replies with, as `{data: base64Data}` (default a small fixed placeholder). Lets a test control the byte count `ManagedSession.pdf()` measures to decide inline-versus-download delivery. */
   setPrintToPdf(base64Data: string): void;
   /** Sets what `Page.getLayoutMetrics` replies with as `cssLayoutViewport`. Unset (the default), the handler falls through to the catch-all `reply({})`, matching real Chrome's shape for a target whose metrics were never queried, and `queryRealViewport()` treats that as "unknown" the same way. */
@@ -380,6 +384,8 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
   // explicitly.
   let nextAutoWindowId = 1000;
   let captureScreenshotBase64 = ONE_PX_JPEG_BASE64;
+  let captureScreenshotFailures = 0;
+  let captureScreenshotCalls = 0;
   let printToPdfBase64 = TINY_PDF_BASE64;
   const runtimeEvaluateCalls: Array<{
     params: Record<string, unknown>;
@@ -722,6 +728,18 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
         return;
       }
       if (msg.method === 'Page.captureScreenshot') {
+        captureScreenshotCalls += 1;
+        if (captureScreenshotFailures > 0) {
+          captureScreenshotFailures -= 1;
+          ws.send(
+            JSON.stringify({
+              id: msg.id,
+              error: { code: -32000, message: 'Unable to capture screenshot' },
+              ...(msg.sessionId ? { sessionId: msg.sessionId } : {}),
+            }),
+          );
+          return;
+        }
         reply({ data: captureScreenshotBase64 });
         return;
       }
@@ -845,6 +863,12 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
     inputCalls,
     setCaptureScreenshot(base64Data) {
       captureScreenshotBase64 = base64Data;
+    },
+    failNextCaptureScreenshots(count) {
+      captureScreenshotFailures = count;
+    },
+    get captureScreenshotCalls() {
+      return captureScreenshotCalls;
     },
     setPrintToPdf(base64Data) {
       printToPdfBase64 = base64Data;
