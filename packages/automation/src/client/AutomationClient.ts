@@ -37,6 +37,7 @@ import {
 } from '@browserglass/protocol';
 import { AutomationError } from '../errors.js';
 import { namedKeyCode, printableKeyCode } from '../keys.js';
+import { type LaunchOptions, launchInstance } from '../launch.js';
 import { ENGINE_WORLD, LocatorEngine } from '../locator/engine.js';
 import type {
   ClickResult,
@@ -222,6 +223,18 @@ export function buildWaitForTextPredicate(selector: string, text: string, exact:
  * A method that needs something this wire cannot carry (an element handle,
  * for one) throws a typed `NOT_IMPLEMENTED` naming what it would need.
  */
+/**
+ * What `release()` needs for a client that `launch()` opened, keyed by the
+ * shared core so a `forTarget()` sub-client releases the same browser.
+ * A client from `connect()` has no entry, and its `release()` only closes
+ * the socket.
+ */
+interface ReleaseState {
+  readonly endBrowser: () => Promise<void>;
+  done: Promise<void> | undefined;
+}
+const launched = new WeakMap<AutomationCore, ReleaseState>();
+
 export class AutomationClient {
   private constructor(
     private readonly core: AutomationCore,
@@ -257,6 +270,87 @@ export class AutomationClient {
       );
     }
     return new AutomationClient(core, targetId);
+  }
+
+  /**
+   * Starts a browser on a running gateway and returns a client connected
+   * to it, in one call. Does the REST plumbing a script would otherwise
+   * carry by hand: acquire with a fresh `requestId`, wait for `ready`,
+   * mint a socket ticket with `caps`, connect, and (with `control`, the
+   * default) take the control lease so the first `navigate()` just works.
+   *
+   * Call {@link release} when done; it ends the browser. Every option has
+   * a default: the gateway comes from `BGLS_URL` or
+   * `http://127.0.0.1:7799/browserglass`, the admin token from
+   * `BGLS_ADMIN_TOKEN`. See {@link LaunchOptions}.
+   *
+   * ```ts
+   * const browser = await AutomationClient.launch();
+   * try {
+   *   await browser.navigate('https://example.com');
+   *   console.log(await browser.text());
+   * } finally {
+   *   await browser.release();
+   * }
+   * ```
+   *
+   * If anything fails after the browser was started (the connect, the
+   * lease), the browser is ended again before this rethrows.
+   */
+  static async launch(opts: LaunchOptions = {}): Promise<AutomationClient> {
+    const instance = await launchInstance(opts);
+    let client: AutomationClient;
+    try {
+      client = await AutomationClient.connect({
+        endpoint: instance.wsUrl,
+        token: instance.ticket,
+        instanceId: instance.instanceId,
+        ...(opts.defaultTimeoutMs !== undefined ? { defaultTimeoutMs: opts.defaultTimeoutMs } : {}),
+        ...(opts.stepBudget !== undefined ? { stepBudget: opts.stepBudget } : {}),
+        ...(opts.yieldPolicy !== undefined ? { yieldPolicy: opts.yieldPolicy } : {}),
+        ...(opts.onAction !== undefined ? { onAction: opts.onAction } : {}),
+        ...(opts.transport !== undefined ? { transport: opts.transport } : {}),
+      });
+    } catch (err) {
+      await instance.release().catch(() => {});
+      throw err;
+    }
+    launched.set(client.core, { endBrowser: instance.release, done: undefined });
+    if (opts.control !== false) {
+      try {
+        await client.acquireControl();
+      } catch (err) {
+        await client.release().catch(() => {});
+        throw err;
+      }
+    }
+    return client;
+  }
+
+  /**
+   * Closes the socket and, for a client from {@link launch}, ends the
+   * browser (`DELETE /v1/instances/:id?force=true`, retried once or twice
+   * on `E_TERMINATE_FAILED`). Idempotent: a second call waits on the
+   * first. If ending the browser fails, the error is thrown and the next
+   * call tries again. For a client from {@link connect} this is the same
+   * as {@link close}, since this client did not start the browser.
+   */
+  async release(): Promise<void> {
+    const state = launched.get(this.core);
+    this.core.destroy();
+    if (state === undefined) return;
+    if (state.done === undefined) {
+      state.done = state.endBrowser().catch((err: unknown) => {
+        state.done = undefined;
+        throw err;
+      });
+    }
+    return state.done;
+  }
+
+  /** Whether this client holds the control lease on {@link targetId} right now. */
+  get holdsControl(): boolean {
+    return this.core.hasControl(this._targetId);
   }
 
   // ==================================================================

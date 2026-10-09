@@ -1,6 +1,7 @@
 import type { WebSocketConstructorLike } from '@browserglass/client';
 import { AutomationClient } from './client/AutomationClient.js';
 import { AutomationError } from './errors.js';
+import type { LaunchOptions } from './launch.js';
 import type { ControlYieldEvent } from './types.js';
 
 /**
@@ -124,8 +125,28 @@ export interface BrowserSwarmOptions {
    * call gets deduped inside the router's idempotency window instead, and
    * ends up with fewer live browsers than `size` asked for, every member
    * pointed at the same instance: the parallelism guide's first gotcha.
+   *
+   * Pass either this or {@link launch}, not both.
    */
-  acquire(index: number, ctx: SwarmAcquireContext): Promise<SwarmAcquireResult>;
+  acquire?(index: number, ctx: SwarmAcquireContext): Promise<SwarmAcquireResult>;
+  /**
+   * The no plumbing alternative to {@link acquire}: every member is opened
+   * with `AutomationClient.launch(launch)` against a running gateway, each
+   * with its own fresh `requestId`, so `size: 10` means ten browsers.
+   *
+   * ```ts
+   * const swarm = await BrowserSwarm.open({ size: 10, launch: { headless: true } });
+   * ```
+   *
+   * The swarm then owns those browsers: `close()` and `shrink()` end them
+   * (`AutomationClient.release()`), and a partially failed `open()` or
+   * `grow()` ends the ones that did start. The one exception is a swarm
+   * with a {@link subject}: there the point is getting the same browsers
+   * back next run, so `close()` and `shrink()` only close the sockets and
+   * leave the browsers running. The swarm's per member subject wins over
+   * any `launch.subject`.
+   */
+  launch?: LaunchOptions;
   /**
    * Who this swarm's browsers belong to. Omitted (the default) every
    * member launches a brand new browser and abandons it at `close()`,
@@ -272,6 +293,12 @@ export class BrowserSwarm {
    * promises for connections it did hand back).
    */
   static async open(opts: BrowserSwarmOptions): Promise<BrowserSwarm> {
+    if ((opts.acquire === undefined) === (opts.launch === undefined)) {
+      throw new AutomationError(
+        'INVALID_ARGUMENT',
+        'BrowserSwarm.open(): pass exactly one of `acquire` or `launch`',
+      );
+    }
     if (!Number.isInteger(opts.size) || opts.size < 1) {
       throw new AutomationError(
         'INVALID_ARGUMENT',
@@ -394,23 +421,55 @@ export class BrowserSwarm {
     const removed = this._members.slice(this._members.length - n);
     this._members = this._members.slice(0, this._members.length - n);
     for (const m of removed) this.claimed.delete(m.index);
-    closeMembers(removed);
+    await this.dispose(removed);
   }
 
   /**
    * Closes every member and releases everything `open()`/`grow()` opened,
    * i.e. every `AutomationClient` connection this `BrowserSwarm` itself
-   * created. It does not, and cannot, release whatever `acquire()`
-   * reserved on the router/gateway side (see `SwarmAcquireResult`'s own
-   * doc comment): call your own release for every `member.instanceId`
-   * first, or after, per your own admission layer's contract. Idempotent:
-   * a second call closes an already-empty member list.
+   * created. With `acquire`, it does not, and cannot, release whatever
+   * `acquire()` reserved on the router/gateway side (see
+   * `SwarmAcquireResult`'s own doc comment): call your own release for
+   * every `member.instanceId` first, or after, per your own admission
+   * layer's contract. With `launch` (and no `subject`) it ends every
+   * member's browser too. Idempotent: a second call closes an
+   * already-empty member list.
    */
   async close(): Promise<void> {
     const members = this._members;
     this._members = [];
     this.claimed.clear();
-    closeMembers(members);
+    await this.dispose(members);
+  }
+
+  /** Whether this swarm started its members' browsers and so must end them: `launch` mode without a subject. */
+  private get ownsBrowsers(): boolean {
+    return this.opts.launch !== undefined && this.opts.subject === undefined;
+  }
+
+  /**
+   * Closes `members`, and ends their browsers when this swarm owns them
+   * (see {@link ownsBrowsers}). Every member is tried even if one fails;
+   * a failed browser release is then reported, because a browser left
+   * running is a leak the caller needs to hear about.
+   */
+  private async dispose(members: readonly SwarmMember[]): Promise<void> {
+    if (!this.ownsBrowsers) {
+      closeMembers(members);
+      return;
+    }
+    const settled = await Promise.allSettled(members.map((m) => m.client.release()));
+    const failed = settled.flatMap((r, i) =>
+      r.status === 'rejected' ? [{ member: members[i] as SwarmMember, reason: r.reason }] : [],
+    );
+    const first = failed[0];
+    if (first === undefined) return;
+    const message = first.reason instanceof Error ? first.reason.message : String(first.reason);
+    throw new AutomationError(
+      'GATEWAY_ERROR',
+      `BrowserSwarm: ${failed.length}/${members.length} browser(s) could not be ended; first failure (instance ${first.member.instanceId}): ${message}`,
+      { instanceIds: failed.map((f) => f.member.instanceId) },
+    );
   }
 
   /**
@@ -487,7 +546,7 @@ export class BrowserSwarm {
     if (failures.length === 0) return opened;
 
     for (const m of opened) this.claimed.delete(m.index);
-    closeMembers(opened);
+    await this.dispose(opened).catch(() => {});
     const first = failures[0];
     const wrapped =
       first instanceof AutomationError
@@ -521,18 +580,14 @@ export class BrowserSwarm {
    */
   private async openOneMember(index: number): Promise<SwarmMember> {
     const subject = swarmMemberSubject(this.opts.subject, index);
-    const { instanceId, wsUrl, token } = await this.opts.acquire(index, {
-      subject,
-      stickyWithinMs: this.opts.stickyWithinMs,
-    });
-    const client = await AutomationClient.connect({
-      endpoint: wsUrl,
-      token,
-      instanceId,
-      ...(this.opts.transport !== undefined ? { transport: this.opts.transport } : {}),
-    });
+    const { client, instanceId } = await this.connectMember(index, subject);
     try {
-      if (this.opts.url !== undefined) {
+      if (this.opts.url !== undefined && client.holdsControl) {
+        // A launched member already holds the lease (`launch.control`
+        // defaults to true), and it keeps it: that is what the caller
+        // asked `launch()` for.
+        await client.navigate(this.opts.url);
+      } else if (this.opts.url !== undefined) {
         // Acquire, navigate, release: exactly what a caller would do by
         // hand, so a member fresh out of `open()` is not left holding
         // control it never asked to keep (see `BrowserSwarmOptions.url`'s
@@ -556,8 +611,44 @@ export class BrowserSwarm {
       member.client.onControlYield((notice) => this.emitYield({ member, notice }));
       return member;
     } catch (err) {
-      client.close();
+      if (this.ownsBrowsers) await client.release().catch(() => {});
+      else client.close();
       throw err;
     }
+  }
+
+  /** One member's connected client, through whichever of `acquire` or `launch` this swarm was opened with. */
+  private async connectMember(
+    index: number,
+    subject: string | undefined,
+  ): Promise<{ client: AutomationClient; instanceId: string }> {
+    const transport = this.opts.transport !== undefined ? { transport: this.opts.transport } : {};
+    if (this.opts.launch !== undefined) {
+      const launch = this.opts.launch;
+      const client = await AutomationClient.launch({
+        ...launch,
+        ...(subject !== undefined ? { subject } : {}),
+        ...(this.opts.stickyWithinMs !== undefined
+          ? { stickyWithinMs: this.opts.stickyWithinMs }
+          : {}),
+        ...(launch.transport === undefined ? transport : {}),
+      });
+      return { client, instanceId: client.instanceId ?? '' };
+    }
+    const acquire = this.opts.acquire;
+    if (acquire === undefined) {
+      throw new AutomationError('INVALID_ARGUMENT', 'BrowserSwarm: no `acquire` or `launch` given');
+    }
+    const { instanceId, wsUrl, token } = await acquire(index, {
+      subject,
+      stickyWithinMs: this.opts.stickyWithinMs,
+    });
+    const client = await AutomationClient.connect({
+      endpoint: wsUrl,
+      token,
+      instanceId,
+      ...transport,
+    });
+    return { client, instanceId };
   }
 }
