@@ -265,11 +265,15 @@ describe('HostRuntime terminate ladder, real Chrome', () => {
     expect(beforeKill.length).toBeGreaterThan(0);
 
     const result = await runtime.terminate(handle, 'graceful');
-    // Windows has no soft signal a taskkill can send; 'graceful' collapses
-    // to force there, and the result must say so.
+    // 'graceful' first asks Chrome to close itself over CDP, which usually
+    // ends it. When it does not, Windows has no soft signal a taskkill can
+    // send, so 'graceful' collapses to force there, and the result must
+    // say so.
     if (process.platform === 'win32') {
-      expect(result.effective).toBe('force');
-      expect(result.warnings.some((w) => w.includes('force'))).toBe(true);
+      expect(['graceful', 'force']).toContain(result.effective);
+      if (result.effective === 'force') {
+        expect(result.warnings.some((w) => w.includes('force'))).toBe(true);
+      }
     }
 
     await new Promise((resolve) => setTimeout(resolve, 500));
