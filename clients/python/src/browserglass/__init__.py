@@ -34,6 +34,7 @@ leaves out.
 from .client import AutomationClient, Diagnostics, Gate, build_wait_for_text_predicate
 from .core import AutomationCore
 from .errors import AutomationError, AutomationErrorCode, KNOWN_CODES, RestError
+from .launch import DEFAULT_GATEWAY_URL, DEFAULT_LAUNCH_CAPS, LaunchedInstance, launch_instance
 from .lease import AUTOMATION_LEASE_PRIORITY, ControlLeaseHandle
 from .locator.types import ClickResult, FillResult, LocatorMatch, LocatorRect, ResolveResult, SelectResult, WaitForResult
 from .rest import AcquireResult, AttachInfo, AttachResult, ReleaseResult, RestClient
@@ -87,6 +88,10 @@ __all__ = [
     "AutomationErrorCode",
     "KNOWN_CODES",
     "RestError",
+    "DEFAULT_GATEWAY_URL",
+    "DEFAULT_LAUNCH_CAPS",
+    "LaunchedInstance",
+    "launch_instance",
     "AUTOMATION_LEASE_PRIORITY",
     "ControlLeaseHandle",
     "ClickResult",
