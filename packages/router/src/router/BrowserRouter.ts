@@ -314,6 +314,24 @@ function scopeAllowsInstanceRow(
 }
 
 /**
+ * How long `terminateGraceThenForce` keeps waiting on a graceful terminate
+ * that is still running after the force attempt behind it failed. The
+ * graceful ladder's own confirm scan can take several seconds per round on
+ * a loaded Windows box, so this has to cover at least one more round.
+ */
+const GRACEFUL_LATE_WAIT_MS = 20_000;
+
+/** A promise's outcome as a value, so a rejection can be inspected after the fact instead of thrown. */
+type Settled<T> = { ok: true; value: T } | { ok: false; error: unknown };
+
+function settle<T>(p: Promise<T>): Promise<Settled<T>> {
+  return p.then(
+    (value) => ({ ok: true as const, value }),
+    (error: unknown) => ({ ok: false as const, error }),
+  );
+}
+
+/**
  * The control plane: placement,
  * reuse, admission, leases (fencing, via the injected `ProfileServicePort`),
  * lifecycle, and (reduced, single node) topology change. Never carries
@@ -1967,53 +1985,84 @@ export class BrowserRouter {
    * awaiting that call forever, since nothing else could trigger the
    * fallback to force.
    *
-   * Deliberately not `Promise.race`: a raced promise that loses still
-   * needs its eventual settlement observed (an unhandled rejection
-   * otherwise), and `Promise.race` alone cannot distinguish "the graceful
-   * call rejected" from "the deadline fired" once both are in the
-   * candidate set. `settled` makes both triggers (the deadline timer and
-   * the graceful call's own `.then`) converge on exactly one escalation,
-   * whichever fires first; the other's eventual settlement is a no-op.
-   * There is no cancellation for the terminate call itself (`NodeTransport`
-   * has no such primitive): a graceful call that loses the race is left
-   * to finish or fail in the background, unobserved, while `'force'`
-   * races ahead to guarantee the browser is actually gone within
-   * `gracefulMs`, not "however long the node takes to notice nobody
-   * answered."
+   * The graceful call is wrapped in `settle` up front, so a rejection
+   * that arrives after this method has moved on is still observed (never
+   * an unhandled rejection) and can still be read. There is no
+   * cancellation for the terminate call itself (`NodeTransport` has no
+   * such primitive): a graceful call that loses the race keeps running on
+   * the node while `'force'` goes ahead.
+   *
+   * A failed force attempt is not taken as proof the browser survived.
+   * The method first waits a bounded time for a graceful call that is
+   * still running, then asks the node once more, and only throws when
+   * that recheck fails as well. See the comments in the body for the
+   * load pattern that made this necessary.
    */
-  private terminateGraceThenForce(
+  private async terminateGraceThenForce(
     nodeId: NodeId,
     instanceId: InstanceId,
     gracefulMs: number,
   ): Promise<TerminateResult> {
-    return new Promise<TerminateResult>((resolve, reject) => {
-      let settled = false;
+    const graceful = settle(this.nodes.terminate(nodeId, instanceId, 'graceful', gracefulMs));
 
-      const escalateToForce = (): void => {
-        if (settled) return;
-        settled = true;
-        this.clock.clearTimeout(deadline);
-        this.nodes.terminate(nodeId, instanceId, 'force').then(resolve, reject);
+    const first = await this.settleWithin(graceful, gracefulMs);
+    if (first !== 'timeout' && first.ok) return first.value;
+
+    // The graceful call threw, or it is still running past `gracefulMs`.
+    const force = await settle(this.nodes.terminate(nodeId, instanceId, 'force'));
+    if (force.ok) return force.value;
+
+    // The force attempt failed, but that alone does not mean the browser
+    // is alive. Under load the two attempts run side by side on the node,
+    // and the force ladder can run out of its confirm budget while the
+    // graceful one, started earlier, goes on to see Chrome exit. Reporting
+    // E_TERMINATE_FAILED then was a false alarm: the caller got a 502 and
+    // Chrome was gone a moment later. So give a graceful call that is
+    // still running a bounded chance to finish first.
+    const gracefulLate = await this.settleWithin(graceful, GRACEFUL_LATE_WAIT_MS);
+    if (gracefulLate !== 'timeout' && gracefulLate.ok) {
+      return {
+        ...gracefulLate.value,
+        warnings: [
+          ...gracefulLate.value.warnings,
+          'the force terminate failed, but the graceful terminate that was still running confirmed the browser exited',
+        ],
       };
+    }
 
-      const deadline = this.clock.setTimeout(escalateToForce, gracefulMs);
+    // Both attempts failed. Ask the node once more before reporting a
+    // failure. A node that already tore the browser down answers at once
+    // (`LocalNode` remembers what it terminated), and one that did not
+    // reruns the ladder, whose step 5 rescans the profile directory: a
+    // Chrome that exited on its own in the meantime is confirmed gone
+    // there, and one that is really still running fails this call too.
+    const recheck = await settle(this.nodes.terminate(nodeId, instanceId, 'force'));
+    if (recheck.ok) {
+      return {
+        ...recheck.value,
+        warnings: [
+          ...recheck.value.warnings,
+          'the graceful and force terminates both failed, and a recheck then confirmed the browser exited',
+        ],
+      };
+    }
+    throw force.error;
+  }
 
-      this.nodes.terminate(nodeId, instanceId, 'graceful', gracefulMs).then(
-        (result) => {
-          if (settled) return; // already escalated to force on the deadline; this result is stale
-          settled = true;
-          this.clock.clearTimeout(deadline);
-          resolve(result);
-        },
-        () => {
-          // A thrown graceful call escalates immediately, exactly
-          // matching this method's predecessor's "graceful failed, try
-          // force now" behaviour, just with the deadline as a second,
-          // independent trigger for the identical escalation.
-          escalateToForce();
-        },
-      );
+  /** Waits for `outcome` up to `ms` on this router's clock; `'timeout'` when it is still pending. */
+  private async settleWithin<T>(
+    outcome: Promise<Settled<T>>,
+    ms: number,
+  ): Promise<Settled<T> | 'timeout'> {
+    let timer: ClockTimer | undefined;
+    const timeout = new Promise<'timeout'>((resolve) => {
+      timer = this.clock.setTimeout(() => resolve('timeout'), ms);
     });
+    try {
+      return await Promise.race([outcome, timeout]);
+    } finally {
+      if (timer !== undefined) this.clock.clearTimeout(timer);
+    }
   }
 
   // ── restart (manual only) ─────────────────────────────────────────────

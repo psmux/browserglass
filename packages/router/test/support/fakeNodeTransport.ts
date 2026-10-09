@@ -94,6 +94,20 @@ export interface FakeNodeTransport extends NodeTransport {
    * death, not only the first.
    */
   failNextTerminates(count: number, error: Error & { code?: string }): void;
+  /**
+   * When set, every `terminate()` call is answered by this function
+   * instead of the defaults above (the call is still recorded in
+   * `terminateCalls`). Returning `undefined` falls through to the
+   * defaults. Lets a test script per mode timing, such as a graceful call
+   * that finishes only after the force call behind it has failed.
+   */
+  terminateHook:
+    | ((
+        mode: TerminateMode,
+        instanceId: string,
+        callIndex: number,
+      ) => Promise<TerminateResult> | undefined)
+    | null;
 }
 
 /** Creates a fresh `FakeNodeTransport`. */
@@ -111,6 +125,7 @@ export function createFakeNodeTransport(): FakeNodeTransport {
     hangGracefulTerminate: false,
     refuseDetach: false,
     failNextTerminate: null,
+    terminateHook: null,
     failNextTerminates(count: number, error: Error & { code?: string }): void {
       remainingTerminateFailures = count;
       terminateFailureError = error;
@@ -171,6 +186,14 @@ export function createFakeNodeTransport(): FakeNodeTransport {
     ): Promise<TerminateResult> {
       transport.terminateCount += 1;
       transport.terminateCalls.push({ nodeId, instanceId, mode, gracePeriodMs });
+      if (transport.terminateHook) {
+        const hooked = transport.terminateHook(
+          mode,
+          instanceId,
+          transport.terminateCalls.length - 1,
+        );
+        if (hooked) return hooked;
+      }
       if (transport.failNextTerminate) {
         const err = transport.failNextTerminate;
         transport.failNextTerminate = null;
