@@ -142,8 +142,13 @@ describe('queryAccessibilityTree: which CDP commands go out', () => {
     const { bridge } = fakeBridge(
       axHandlers({
         'Accessibility.queryAXTree': () => ({
-          // Chrome's real name for the-internet's Login button is " Login".
-          nodes: [named(' Login', 1), named('Log  in\n', 2), named('Logout', 3), named('login', 4)],
+          // Chrome's real name for the-internet's Login button: icon glyph, space, word.
+          nodes: [
+            named('\uF090 Login', 1),
+            named('Log  in\n', 2),
+            named('Logout', 3),
+            named('login', 4),
+          ],
         }),
       }),
     );

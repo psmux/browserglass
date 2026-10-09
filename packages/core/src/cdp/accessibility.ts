@@ -241,13 +241,13 @@ function shapeNode(raw: RawAxNode): AxTreeNode | null {
  *
  * Private use characters are icon font glyphs. Chrome puts an icon's CSS
  * `content` into the name, so the-internet's Login button, an `<i>` with a
- * Font Awesome icon followed by the word, is named " Login" once the
+ * Font Awesome icon followed by the word, is named "\uF090 Login" once the
  * font has loaded. That character carries no meaning a caller could type,
  * and leaving it in made `role=button[name="Login"]` miss.
  */
 export function normalizeAxName(name: string): string {
   return name
-    .replace(/[-\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu, '')
+    .replace(/[\uE000-\uF8FF\u{F0000}-\u{FFFFD}\u{100000}-\u{10FFFD}]/gu, '')
     .replace(/\s+/g, ' ')
     .trim();
 }
