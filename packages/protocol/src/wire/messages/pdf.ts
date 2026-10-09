@@ -154,7 +154,7 @@ export interface PagePdfGot extends Envelope {
   data?: string;
   /** Set when `sizeBytes > MAX_INLINE_PDF_BYTES`. Equal to `pdfId`; named separately to mirror `download.ready.downloadId`. */
   downloadId?: string;
-  /** Set alongside `downloadId`. A short-lived, single-use HTTP URL, the identical mechanism `download.ready.url` uses. */
+  /** Set alongside `downloadId`. A short-lived, single-use HTTP URL, the identical mechanism and URL shape `download.ready.url` uses: absolute when the gateway has `publicUrl`, otherwise a host root path that already includes the base path. */
   url?: string;
   /** Set alongside `downloadId`. Epoch ms after which `url` stops working. */
   expiresAt?: number;

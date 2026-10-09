@@ -78,6 +78,7 @@ import type {
   InspectAtOptions,
   InspectResult,
   ListRecordingsOptions,
+  NavigateOptions,
   OpenTabOptions,
   PageMapEpoch,
   PageMapOptions,
@@ -206,6 +207,9 @@ export function buildWaitForTextPredicate(selector: string, text: string, exact:
     '})()',
   ].join('\n');
 }
+
+/** How long {@link AutomationClient.navigate} lets the gateway wait for the `load` event by default. */
+const DEFAULT_NAVIGATE_LOAD_TIMEOUT_MS = 30_000;
 
 /**
  * Programmatic control surface over a `bgls.v1` session.
@@ -790,17 +794,44 @@ export class AutomationClient {
   // Navigation (requires `navigate` AND the held lease)
   // ==================================================================
 
-  async navigate(
-    url: string,
-    opts?: { referrer?: string; waitUntil?: 'commit' | 'load' | 'networkidle' },
-  ): Promise<StatusResult> {
+  /**
+   * Navigates {@link targetId} to `url` and resolves once the page has
+   * loaded, so reading the page straight after `await navigate(url)` sees
+   * the new document (its real `title`, `loading: false`).
+   *
+   * `waitUntil` picks when this resolves:
+   *
+   * * `'load'` (the default): after the new document's `load` event. If
+   *   the page has not loaded within `timeoutMs` (default 30000) this still
+   *   resolves, with `loading: true`, rather than throwing; check
+   *   `loading` when it matters.
+   * * `'commit'`: as soon as the navigation commits, with the page still
+   *   loading (`loading: true`, usually an empty `title`). The old
+   *   behaviour; use it when you will wait some other way.
+   * * `'networkidle'`: not implemented by the gateway, which refuses it.
+   *
+   * Requires `navigate` and a held control lease.
+   */
+  async navigate(url: string, opts?: NavigateOptions): Promise<StatusResult> {
+    const waitUntil = opts?.waitUntil ?? 'load';
+    const loadTimeoutMs = opts?.timeoutMs ?? DEFAULT_NAVIGATE_LOAD_TIMEOUT_MS;
     return this.run('navigate', this._targetId, ['navigate'], true, { url }, false, async () => {
-      const reply = await this.core.request<NavState>('nav.goto', {
-        targetId: this._targetId,
-        url,
-        ...(opts?.referrer !== undefined ? { referrer: opts.referrer } : {}),
-        ...(opts?.waitUntil !== undefined ? { waitUntil: opts.waitUntil } : {}),
-      });
+      const reply = await this.core.request<NavState>(
+        'nav.goto',
+        {
+          targetId: this._targetId,
+          url,
+          ...(opts?.referrer !== undefined ? { referrer: opts.referrer } : {}),
+          waitUntil,
+          ...(waitUntil === 'load' ? { timeoutMs: loadTimeoutMs } : {}),
+        },
+        // The server answers by `timeoutMs` at the latest when waiting for
+        // load; this client waits a little longer so the honest
+        // `loading: true` reply wins over a client side TIMEOUT.
+        waitUntil === 'load'
+          ? Math.max(this.core.defaultTimeoutMs, loadTimeoutMs + 5000)
+          : undefined,
+      );
       return this.navStateToStatus(reply);
     });
   }
@@ -992,7 +1023,7 @@ export class AutomationClient {
           sizeBytes: reply.sizeBytes,
           ...(reply.data !== undefined ? { data: reply.data } : {}),
           ...(reply.downloadId !== undefined ? { downloadId: reply.downloadId } : {}),
-          ...(reply.url !== undefined ? { url: reply.url } : {}),
+          ...(reply.url !== undefined ? { url: this.core.resolveGatewayUrl(reply.url) } : {}),
           ...(reply.expiresAt !== undefined ? { expiresAt: reply.expiresAt } : {}),
           ...(reply.sha256 !== undefined ? { sha256: reply.sha256 } : {}),
         };
@@ -3208,7 +3239,7 @@ export class AutomationClient {
           downloadId: m.downloadId,
           sizeBytes: m.sizeBytes,
           sha256: m.sha256,
-          url: m.url,
+          url: this.core.resolveGatewayUrl(m.url),
           expiresAt: m.expiresAt,
         });
       } else if (msg.t === 'download.failed') {

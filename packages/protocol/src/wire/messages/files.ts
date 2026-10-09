@@ -196,6 +196,13 @@ export interface DownloadReady extends Envelope {
   downloadId: string;
   sizeBytes: number;
   sha256: string;
+  /**
+   * Either an absolute URL (`<publicUrl origin><basePath>/v1/downloads/<token>`,
+   * when the gateway has `publicUrl` configured) or a path from the host
+   * root that already includes the gateway's base path
+   * (`/browserglass/v1/downloads/<token>` by default). Resolve the path
+   * form against the gateway's origin, never against the base path.
+   */
   url: string;
   expiresAt: number;
 }

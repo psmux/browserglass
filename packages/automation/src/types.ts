@@ -424,6 +424,15 @@ export interface PdfResult {
   data?: string;
   /** Set only when `data` is absent: the signed URL delivery, `DownloadResult`'s own shape. */
   downloadId?: string;
+  /**
+   * Absolute `http(s)` URL of the file, ready to GET with no further
+   * joining. The gateway itself sends a path that already includes its
+   * base path (`/browserglass/v1/downloads/<token>` by default), or a full
+   * URL when it has `publicUrl` configured; this client resolves the path
+   * form against the origin its socket dialed. Single use: the first GET
+   * consumes it. No auth header is needed, the token in the URL is the
+   * credential.
+   */
   url?: string;
   /** Epoch ms after which `url` stops working. Set alongside `url`. */
   expiresAt?: number;
@@ -516,6 +525,21 @@ export interface RestartInstanceResult {
   durationMs: number;
   streamsResubscribed: number[];
   streamsLost: number[];
+}
+
+/** Options for {@link AutomationClient.navigate}. */
+export interface NavigateOptions {
+  referrer?: string;
+  /**
+   * When `navigate()` resolves. Default `'load'`: after the new document's
+   * `load` event, so the page can be read straight away. `'commit'`
+   * resolves as soon as the navigation commits, with the page still
+   * loading. `'networkidle'` is declared on the wire but the gateway
+   * refuses it.
+   */
+  waitUntil?: 'commit' | 'load' | 'networkidle';
+  /** With `waitUntil: 'load'`: how long the gateway waits for `load` before answering with `loading: true`. Default 30000, capped at 120000 by the gateway. */
+  timeoutMs?: number;
 }
 
 /** Options for {@link AutomationClient.waitForNavigation}. */
@@ -846,6 +870,7 @@ export interface DownloadResult {
   downloadId: string;
   sizeBytes: number;
   sha256: string;
+  /** Absolute `http(s)` URL of the file. Same rules as {@link PdfResult.url}: resolved against the origin this client's socket dialed, base path included, single use. */
   url: string;
   /** Epoch ms after which `url` stops working. */
   expiresAt: number;

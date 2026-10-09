@@ -104,7 +104,28 @@ export class AutomationCore {
   private stepsUsed = 0;
   private destroyed = false;
 
+  /**
+   * Turns a URL the gateway handed back (a download or large PDF URL,
+   * which is root relative unless the gateway has `publicUrl` set) into an
+   * absolute `http(s)` URL on the same origin this client's socket dialed.
+   * Already absolute URLs pass through. A relative URL that cannot be
+   * resolved (an endpoint that is not itself a URL) is returned unchanged.
+   */
+  resolveGatewayUrl(url: string): string {
+    try {
+      const base = new URL(this.endpoint);
+      if (base.protocol === 'ws:') base.protocol = 'http:';
+      else if (base.protocol === 'wss:') base.protocol = 'https:';
+      return new URL(url, base).toString();
+    } catch {
+      return url;
+    }
+  }
+
+  private readonly endpoint: string;
+
   constructor(options: AutomationClientOptions) {
+    this.endpoint = options.endpoint;
     this.defaultTimeoutMs = options.defaultTimeoutMs ?? 15000;
     this.dryRun = options.dryRun ?? false;
     this.stepBudget = options.stepBudget ?? Number.POSITIVE_INFINITY;

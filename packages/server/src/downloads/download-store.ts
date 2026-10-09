@@ -86,8 +86,22 @@ export interface DownloadStoreOptions {
   readonly maxBytes?: number;
   /** How long an issued URL stays fetchable. Defaults to 60s. Referenced by name in `@browserglass/protocol`'s `bgls.error.download.expired` doc as `limits.downloadUrlTtlMs`. */
   readonly urlTtlMs?: number;
-  /** `ResolvedConfig.publicUrl`. When set, issued URLs are absolute (`<publicUrl>/v1/downloads/<token>`); when `null`, they are root relative (`/v1/downloads/<token>`), fetchable against whichever host the caller already reached this gateway on, the same way a WebSocket client already knows its own gateway origin without being told it again. */
+  /**
+   * `ResolvedConfig.publicUrl`. Only its origin is used, the same way
+   * `lifecycle/wiring.ts`'s `wsUrlFor` uses it for the socket URL. When
+   * set, issued URLs are absolute (`<origin><basePath>/v1/downloads/<token>`);
+   * when `null`, they are root relative (`<basePath>/v1/downloads/<token>`),
+   * which is a complete path from the host root and resolves correctly
+   * against any URL on the gateway's own origin.
+   */
   readonly publicUrl?: string | null;
+  /**
+   * `ResolvedConfig.basePath` (default `/browserglass`), the prefix every
+   * REST route is mounted under, `GET /v1/downloads/:token` included.
+   * Without it an issued URL pointed at the host root, where nothing
+   * answers. `'/'` or omitted means no prefix.
+   */
+  readonly basePath?: string;
   readonly sweepIntervalMs?: number;
   readonly now?: () => number;
 }
@@ -154,12 +168,29 @@ export interface DownloadStore {
   dispose(): Promise<void>;
 }
 
+/**
+ * Everything before `/v1/downloads/<token>` in an issued URL: the public
+ * origin when one is configured, then the base path. Exported for tests.
+ */
+export function downloadUrlPrefix(publicUrl: string | null, basePath: string | undefined): string {
+  const path = basePath === undefined || basePath === '/' ? '' : basePath.replace(/\/+$/, '');
+  if (publicUrl === null || publicUrl === '') return path;
+  let origin: string;
+  try {
+    origin = new URL(publicUrl).origin;
+  } catch {
+    origin = publicUrl.replace(/\/+$/, '');
+  }
+  return `${origin}${path}`;
+}
+
 export function createDownloadStore(opts: DownloadStoreOptions): DownloadStore {
   const root = opts.root;
   const logger = opts.logger;
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
   const urlTtlMs = opts.urlTtlMs ?? DEFAULT_URL_TTL_MS;
   const publicUrl = opts.publicUrl ?? null;
+  const urlPrefix = downloadUrlPrefix(publicUrl, opts.basePath);
   const sweepIntervalMs = opts.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
   const now = opts.now ?? (() => Date.now());
 
@@ -235,8 +266,7 @@ export function createDownloadStore(opts: DownloadStoreOptions): DownloadStore {
     const token = randomBytes(TOKEN_BYTES).toString('hex');
     const expiresAt = now() + urlTtlMs;
     byToken.set(token, { downloadId, path, safeName, mime, sizeBytes, expiresAt });
-    const base = publicUrl !== null && publicUrl !== '' ? publicUrl.replace(/\/$/, '') : '';
-    return { token, url: `${base}/v1/downloads/${token}`, expiresAt };
+    return { token, url: `${urlPrefix}/v1/downloads/${token}`, expiresAt };
   }
 
   function takeToken(token: string): TakenDownloadToken | null {

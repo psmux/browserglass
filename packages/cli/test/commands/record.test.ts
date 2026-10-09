@@ -518,9 +518,9 @@ describe('bgls record export', () => {
 // `--video`: frame export
 // happens exactly as above, then `runVideoExport` in `record.ts` asks
 // `registry.encoderFor()` for a plugin. It reads `bgls-plugins.json` from
-// `process.cwd()` (`defaultPluginsFilePath()`'s own default) and resolves
-// entries relative to `BGLS_DATA_DIR` (`defaultDataDir()`'s own default),
-// so these tests point both at one temp "project" directory the same way
+// the data dir (`BGLS_DATA_DIR`, `defaultDataDir()`'s own default), falling
+// back to a legacy one in `process.cwd()`, and resolves entries relative
+// to the data dir, so these tests point both at one temp "project" directory the same way
 // `token.test.ts` already points `BGLS_DATA_DIR` at a temp dir: save/restore
 // the env var, and stub `process.cwd()` for the duration of each test only.
 //

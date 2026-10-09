@@ -68,7 +68,7 @@ import {
   resolveGatewayConnection,
   resolveGlobalFlags,
 } from '../context.js';
-import { defaultPluginsFilePath, readPluginsFile } from '../plugins/record.js';
+import { readPluginsFile, resolvePluginsFileForRead } from '../plugins/record.js';
 import { encoderFor } from '../plugins/registry.js';
 import { defaultDataDir } from '../session-file.js';
 import {
@@ -576,13 +576,15 @@ async function runVideoExport(
   frames: readonly ExportedFrame[],
   outDir: string,
   outPath: string,
+  dataDir: string,
 ): Promise<VideoOutcome> {
-  const pluginsFilePath = defaultPluginsFilePath();
-  const read = readPluginsFile(pluginsFilePath);
+  // The same record `bgls plugins add` wrote, under the same data dir
+  // (`--data-dir`, then BGLS_DATA_DIR, then ./bgls-data), with the legacy
+  // ./bgls-plugins.json as a fallback.
+  const read = readPluginsFile(resolvePluginsFileForRead(dataDir));
   if (!read.ok) {
     return { status: 'load-failed', reason: `${read.reason}` };
   }
-  const dataDir = defaultDataDir();
   const availability = await encoderFor(read.file, dataDir);
   if (availability.status !== 'ready' && availability.status !== 'unusable') {
     return availability;
@@ -668,7 +670,8 @@ export const recordExportCommand = defineCommand({
     const videoArg = args['video'] as string | undefined;
     let video: VideoOutcome | undefined;
     if (videoArg !== undefined) {
-      video = await runVideoExport(frames, outDir, resolve(videoArg));
+      const dataDir = resolve((args as { 'data-dir'?: string })['data-dir'] ?? defaultDataDir());
+      video = await runVideoExport(frames, outDir, resolve(videoArg), dataDir);
     }
 
     printer.result(

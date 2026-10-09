@@ -4373,7 +4373,12 @@
         },
         "waitUntil": {
           "type": "string",
-          "enum": ["commit", "load", "networkidle"]
+          "enum": ["commit", "load", "networkidle"],
+          "description": "When the correlated `nav.state` reply is sent. Default `'commit'`.\n\n* `'commit'`: as soon as the navigation commits. The page is usually   still loading (`loading: true`, often an empty `title`).\n* `'load'`: after the new document's `load` event, so the reply has the   loaded page's title and `loading: false`. A same-document navigation   (fragment only) answers at once. If `load` has not fired within   `timeoutMs` the reply is sent anyway with `loading: true`.\n* `'networkidle'`: reserved. The reference gateway refuses it with   `bgls.error.protocol.bad_envelope`."
+        },
+        "timeoutMs": {
+          "type": "number",
+          "description": "With `waitUntil: 'load'`: how long the server waits for the `load` event, ms. Default 30000, capped at 120000. A client's own request timeout must be longer than this."
         }
       },
       "required": ["t", "targetId", "ts", "url", "v"],
@@ -5572,7 +5577,8 @@
           "type": "string"
         },
         "url": {
-          "type": "string"
+          "type": "string",
+          "description": "Either an absolute URL (`<publicUrl origin><basePath>/v1/downloads/<token>`, when the gateway has `publicUrl` configured) or a path from the host root that already includes the gateway's base path (`/browserglass/v1/downloads/<token>` by default). Resolve the path form against the gateway's origin, never against the base path."
         },
         "expiresAt": {
           "type": "number"
@@ -9211,7 +9217,7 @@
         },
         "url": {
           "type": "string",
-          "description": "Set alongside `downloadId`. A short-lived, single-use HTTP URL, the identical mechanism `download.ready.url` uses."
+          "description": "Set alongside `downloadId`. A short-lived, single-use HTTP URL, the identical mechanism and URL shape `download.ready.url` uses: absolute when the gateway has `publicUrl`, otherwise a host root path that already includes the base path."
         },
         "expiresAt": {
           "type": "number",

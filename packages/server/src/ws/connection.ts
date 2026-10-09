@@ -55,14 +55,18 @@ import type { ResolvedConfig } from '../config/types.js';
 import type { UploadStore } from '../files/upload-store.js';
 import type { HookRegistry } from '../hooks/dispatch.js';
 import type { ControlGrantedEvent, NavigationEvent, ViewerJoinedEvent } from '../hooks/types.js';
-import type { ManagedSession } from '../session/managed-session.js';
+import {
+  MAX_NAV_LOAD_TIMEOUT_MS,
+  type ManagedSession,
+  type NavigateWaitUntil,
+} from '../session/managed-session.js';
 import type { SessionRegistry } from '../session/registry.js';
 import type { ConnectionSink } from '../session/types.js';
 import { checkCapability } from '../wire/capability-check.js';
 import { buildGoodbye, reasonForCloseCode } from '../wire/close.js';
 import { type RateBucketName, ViewerRateLimiters } from '../wire/rate-limit.js';
 import type { ResumeStore } from '../wire/resume-store.js';
-import { sanitizeMessage } from '../wire/sanitize.js';
+import { clientSafeErrorMessage, redactServerPaths, sanitizeMessage } from '../wire/sanitize.js';
 import { buildWelcomeFields, rateLimitInputsFor } from '../wire/welcome-fields.js';
 import {
   type PreUpgradeCarriers,
@@ -304,7 +308,7 @@ export class Connection implements ConnectionSink {
       if (!this.ensureRateLimiters().take(diagBucket, performance.now(), scope)) return;
     }
     this.sqCounter += 1;
-    const full = { v: 1, ...env, ts: Date.now(), sq: this.sqCounter };
+    const full = { v: 1, ...this.redactErrorPaths(env), ts: Date.now(), sq: this.sqCounter };
     this.ws.send(JSON.stringify(full));
   }
 
@@ -340,7 +344,12 @@ export class Connection implements ConnectionSink {
   private async runNav(
     msg: Record<string, unknown>,
     kind: 'goto' | 'back' | 'forward' | 'reload' | 'stop',
-    params: { readonly url?: string; readonly ignoreCache?: boolean },
+    params: {
+      readonly url?: string;
+      readonly ignoreCache?: boolean;
+      readonly waitUntil?: NavigateWaitUntil;
+      readonly timeoutMs?: number;
+    },
   ): Promise<void> {
     const targetId = str(msg['targetId']);
     // `onNavigation` only gates `'goto'`: a caller-named URL is the one
@@ -406,6 +415,28 @@ export class Connection implements ConnectionSink {
         securityState: 'unknown' as const,
       },
     );
+  }
+
+  /**
+   * Last line of defence for every `error` envelope this connection sends:
+   * strips absolute filesystem paths of this host from `message` (see
+   * `wire/sanitize.ts`'s `redactServerPaths`). Handlers are expected to
+   * build clean messages in the first place (`clientSafeErrorMessage`),
+   * but many forward a caught `err.message`, and a Node `fs` error's
+   * message embeds the full path, OS username included. When something is
+   * redacted the original is logged so an operator still has it.
+   */
+  private redactErrorPaths<T extends { readonly t: string }>(env: T): T {
+    if (env.t !== 'error') return env;
+    const message = (env as { readonly message?: unknown }).message;
+    if (typeof message !== 'string') return env;
+    const redacted = redactServerPaths(message);
+    if (redacted === message) return env;
+    this.deps.logger.warn(
+      { component: 'ws', code: String((env as { readonly code?: unknown }).code), message },
+      'redacted a server filesystem path from an outbound error message',
+    );
+    return { ...env, message: redacted };
   }
 
   private replyTo<T extends { readonly t: string }>(
@@ -569,7 +600,7 @@ export class Connection implements ConnectionSink {
           t: 'error',
           code,
           category: code.split('.')[2] ?? 'upload',
-          message: err instanceof Error ? err.message : `upload "${uploadId}" rejected a chunk`,
+          message: clientSafeErrorMessage(err, `upload "${uploadId}" rejected a chunk`),
           fatal: false,
           retryable: false,
           context: { uploadId },
@@ -1474,7 +1505,33 @@ export class Connection implements ConnectionSink {
       );
     },
 
-    'nav.goto': async (msg) => this.runNav(msg, 'goto', { url: str(msg['url']) }),
+    'nav.goto': async (msg) => {
+      const waitUntil = msg['waitUntil'];
+      if (waitUntil !== undefined && waitUntil !== 'commit' && waitUntil !== 'load') {
+        this.replyTo(msg, {
+          t: 'error',
+          code: 'bgls.error.protocol.bad_envelope',
+          category: 'protocol',
+          message:
+            waitUntil === 'networkidle'
+              ? "nav.goto waitUntil 'networkidle' is not implemented by this gateway. Use 'load'."
+              : "nav.goto waitUntil must be 'commit' or 'load'.",
+          fatal: false,
+          retryable: false,
+        });
+        return;
+      }
+      const rawTimeout = msg['timeoutMs'];
+      const timeoutMs =
+        typeof rawTimeout === 'number' && Number.isFinite(rawTimeout) && rawTimeout > 0
+          ? Math.min(rawTimeout, MAX_NAV_LOAD_TIMEOUT_MS)
+          : undefined;
+      await this.runNav(msg, 'goto', {
+        url: str(msg['url']),
+        ...(waitUntil !== undefined ? { waitUntil } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      });
+    },
     'nav.back': async (msg) => this.runNav(msg, 'back', {}),
     'nav.forward': async (msg) => this.runNav(msg, 'forward', {}),
     'nav.reload': async (msg) =>
@@ -1649,8 +1706,7 @@ export class Connection implements ConnectionSink {
           t: 'error',
           code: wireCode,
           category: wireCode === 'bgls.error.target.not_found' ? 'target' : 'capture',
-          message:
-            err instanceof Error ? err.message : `page.pdf.get failed for target "${targetId}".`,
+          message: clientSafeErrorMessage(err, `page.pdf.get failed for target "${targetId}".`),
           fatal: false,
           retryable: wireCode !== 'bgls.error.target.not_found',
         });
@@ -3280,7 +3336,7 @@ function recordingErrorReply(
     t: 'error',
     code: wireCode,
     category: wireCode === 'bgls.error.internal' ? 'internal' : 'target',
-    message: err instanceof Error ? err.message : `recording request failed for "${subject}".`,
+    message: clientSafeErrorMessage(err, `recording request failed for "${subject}".`),
     fatal: false,
     retryable: false,
   };

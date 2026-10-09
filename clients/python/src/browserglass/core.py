@@ -13,6 +13,7 @@ import asyncio
 import math
 import time
 import uuid
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set
 
 from .errors import AutomationError
@@ -67,6 +68,21 @@ def new_id() -> str:
 
 
 class AutomationCore:
+    def resolve_gateway_url(self, url: str) -> str:
+        """Turns a URL the gateway handed back (a download URL, root
+        relative and base path inclusive unless the gateway has
+        ``publicUrl`` set) into an absolute ``http(s)`` URL on the origin
+        this client's socket dialed. Already absolute URLs pass through."""
+        try:
+            parts = urlsplit(self.endpoint)
+            scheme = {"ws": "http", "wss": "https"}.get(parts.scheme, parts.scheme)
+            if not scheme or not parts.netloc:
+                return url
+            base = urlunsplit((scheme, parts.netloc, parts.path, "", ""))
+            return urljoin(base, url)
+        except ValueError:
+            return url
+
     def __init__(
         self,
         *,
@@ -80,6 +96,7 @@ class AutomationCore:
         socket_factory: Optional[SocketFactory] = None,
         ping_interval_s: Optional[float] = 5.0,
     ) -> None:
+        self.endpoint = endpoint
         self.default_timeout_ms = default_timeout_ms
         self.dry_run = dry_run
         self.step_budget = step_budget

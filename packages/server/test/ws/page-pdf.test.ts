@@ -6,6 +6,8 @@
  * harness usage.
  */
 
+import { existsSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { setTier1EncoderFactory } from '@browserglass/core';
 import { MAX_INLINE_PDF_BYTES } from '@browserglass/protocol';
 import { describe, expect, it } from 'vitest';
@@ -184,6 +186,79 @@ describe('page.pdf.get: download delivery for anything over the inline ceiling',
       const reply = await nextMessageSkipping(ws, UNSOLICITED);
       expect(reply['t']).toBe('error');
       expect(reply['code']).toBe('bgls.error.capture.too_large');
+      ws.close();
+    } finally {
+      await gw.close();
+    }
+  });
+});
+
+describe('page.pdf.get: a download store whose root does not exist yet', () => {
+  it('creates the root on first use instead of failing with ENOENT', async () => {
+    // A fresh gateway: no real browser download has ever happened, so
+    // nothing has created the downloads directory yet.
+    const gw = await startTestGateway({
+      downloadRoot: (tempDir) => join(tempDir, 'not', 'created', 'yet'),
+    });
+    gw.addTarget({
+      targetId: 'cdp-a',
+      type: 'page',
+      title: 'A',
+      url: 'https://a.example',
+      attached: false,
+      windowId: 1,
+    });
+    expect(existsSync(gw.downloads.root)).toBe(false);
+    gw.chrome.setPrintToPdf(base64OfLength(MAX_INLINE_PDF_BYTES + 5000));
+    try {
+      const { ws, targetId } = await connectViewer(gw);
+      ws.send(JSON.stringify({ v: 1, t: 'page.pdf.get', ts: Date.now(), targetId }));
+      const got = await nextMessageSkipping(ws, UNSOLICITED);
+      expect(got['t']).toBe('page.pdf.got');
+      expect(typeof got['downloadId']).toBe('string');
+      expect(existsSync(join(gw.downloads.root, got['downloadId'] as string))).toBe(true);
+      ws.close();
+    } finally {
+      await gw.close();
+    }
+  });
+
+  it('never puts the server filesystem path in the error a client sees when staging fails', async () => {
+    let blocked = '';
+    const gw = await startTestGateway({
+      // A regular file where a directory is needed: mkdir cannot succeed,
+      // and the fs error names the full path.
+      downloadRoot: (tempDir) => {
+        const file = join(tempDir, 'a-file');
+        writeFileSync(file, 'x');
+        blocked = join(file, 'downloads');
+        return blocked;
+      },
+    });
+    gw.addTarget({
+      targetId: 'cdp-a',
+      type: 'page',
+      title: 'A',
+      url: 'https://a.example',
+      attached: false,
+      windowId: 1,
+    });
+    gw.chrome.setPrintToPdf(base64OfLength(MAX_INLINE_PDF_BYTES + 5000));
+    try {
+      const { ws, targetId } = await connectViewer(gw);
+      ws.send(JSON.stringify({ v: 1, t: 'page.pdf.get', ts: Date.now(), targetId }));
+      const reply = await nextMessageSkipping(ws, UNSOLICITED);
+      expect(reply['t']).toBe('error');
+      expect(reply['code']).toBe('bgls.error.capture.failed');
+      const message = reply['message'] as string;
+      expect(message).toMatch(/download store/);
+      expect(message).not.toContain(blocked);
+      expect(message).not.toContain(gw.downloads.root);
+      expect(message).not.toMatch(/[A-Za-z]:[\\/]/);
+      // The operator still gets the detail, in the log.
+      expect(
+        gw.logLines.some((l) => l.level === 'error' && /stage a large PDF/.test(l.message)),
+      ).toBe(true);
       ws.close();
     } finally {
       await gw.close();
