@@ -17,3 +17,7 @@ jobs:
       - run: pnpm run build:plugins
       - run: node -e "console.log(require('os').tmpdir(), process.cwd())"
       - run: pnpm --filter @browserglass/cli --filter @browserglass/conformance --no-bail run test
+      - if: always()
+        run: pnpm --filter @browserglass/conformance run test
+      - if: always()
+        run: pnpm --filter @browserglass/runtime-host run test
