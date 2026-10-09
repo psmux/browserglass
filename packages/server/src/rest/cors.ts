@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ResolvedConfig } from '../config/types.js';
+import { originOnAllowList } from '../ws/origin-check.js';
 
 /**
  * CORS for the REST surface (defect: a `<browser-glass>` widget embedded
@@ -24,7 +25,7 @@ import type { ResolvedConfig } from '../config/types.js';
 
 /** True when `origin` is allowed to receive CORS headers under `allowedOrigins`. */
 function originAllowed(origin: string, allowedOrigins: readonly string[] | '*'): boolean {
-  return allowedOrigins === '*' || allowedOrigins.includes(origin);
+  return originOnAllowList(origin, allowedOrigins);
 }
 
 /**
