@@ -370,6 +370,7 @@ All three expect `pnpm install && pnpm -r build` at the repo root first.
 
 Read this before you plan around a feature.
 
+* Platforms: Windows is the most tested. Linux runs the full suite apart from a few browser lifecycle tests. On macOS, launching a local Chrome does not work yet. Fixes are in progress; until then, macOS users can attach to a Chrome they start themselves with `--runtime remote`.
 * Nothing is published to npm or PyPI yet. Use a clone.
 * `bgls serve` only supports dev auth. For real identity (JWKS or HMAC), embed `@browserglass/server` and configure `auth` yourself.
 * The Docker and Kubernetes runtimes are placeholders. Use `host` for local Chrome, or `remote` to attach to Chrome you run in containers yourself.
