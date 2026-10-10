@@ -127,7 +127,6 @@ mkdirSync(join(outDir, 'smoke'), { recursive: true });
 const browser = await launch();
 const results = [];
 let seconds = 0;
-let lastShot = 0;
 try {
   // Open the start page before recording, which also caches the files
   // every page of this site shares.
@@ -146,11 +145,8 @@ try {
       } catch (err) {
         detail = `error: ${String(err?.message).slice(0, 80)}`;
       }
-      // Keep a screenshot of every page as evidence next to the report. The
-      // gateway allows one screenshot a second by default, so space them out.
-      await sleep(Math.max(0, lastShot + 1100 - Date.now()));
+      // Keep a screenshot of every page as evidence next to the report.
       const shot = await browser.screenshot({ format: 'png' });
-      lastShot = Date.now();
       const shotFile = `${c.path.replace(/\W+/g, '-').replace(/^-|-$/g, '')}.png`;
       writeFileSync(join(outDir, 'smoke', shotFile), Buffer.from(shot.data, 'base64'));
       results.push({

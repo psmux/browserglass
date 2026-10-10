@@ -292,6 +292,43 @@ used to simply hang). This means a queued acquire's actual wait time is
 bounded by how often the reaper tick runs (`config.reaperIntervalMs`),
 not by anything faster.
 
+## Per connection rate limits
+
+Every WebSocket connection gets its own token buckets, checked before a
+message reaches its handler. The full table is in
+[`protocol/wire-spec.md`](protocol/wire-spec.md#rate-limits). Most of them
+are fixed. The one an automation workload is most likely to notice is
+`capture`, which covers `target.capture` (screenshots), `page.pdf.get` and
+`recording.start`, because each of those costs a CDP round trip plus an
+encode on the gateway.
+
+The capture bucket is kept per tab, so ten agents on one connection each
+screenshotting their own tab do not share a budget. The default is 5 a
+second with a burst of 10. That covers a screenshot after every step of
+a script without any pacing, and still stops one client from spinning
+`Page.captureScreenshot` in a loop.
+
+To change it:
+
+| Where | Rate | Burst |
+|---|---|---|
+| `createBrowserGlass({ limits })` | `captureRatePerSec` | `captureBurst` |
+| Environment | `BGLS_CAPTURE_RATE_PER_SEC` | `BGLS_CAPTURE_BURST` |
+| `bgls serve` | `--capture-rate` | `--capture-burst` |
+
+Explicit config beats the environment, and the environment beats the
+default. If you set only the rate, the burst becomes twice the rate, so
+`--capture-rate 20` gives 20 a second with a burst of 40. A value that is
+not a positive number fails startup with a `ConfigError` instead of being
+ignored.
+
+When a client does go over, it gets `bgls.error.limit.rate` with a
+`retryAfterMs` equal to the time until the next token. The Node
+`AutomationClient` retries `screenshot()` and `pdf()` once after that
+wait, and the Python client does the same for `screenshot()`. Waits over
+five seconds are not retried, and neither is a second refusal, so a
+caller that really is over the limit still gets `POLICY_DENIED`.
+
 ## The cheapest capacity is the browser you already have
 
 Every ceiling above is about admitting NEW instances, so the first

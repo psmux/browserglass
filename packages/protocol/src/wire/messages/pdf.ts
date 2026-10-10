@@ -17,7 +17,7 @@ import type { Envelope } from '../envelope.js';
  * reads cookies, storage, and tokens a rendered VIEW of the page does not
  * expose, and a PDF stays on the view side of that line exactly where a
  * screenshot does. Reusing `capture` also means `page.pdf.get` shares
- * `target.capture`'s own rate bucket (`captureRatePerSec`) rather than
+ * `target.capture`'s own rate bucket (`captureRate`) rather than
  * getting a fresh limit to reason about independently: both are one CDP
  * round trip against the same renderer, and a caller already budgeted for
  * screenshot traffic should not need a second, separate ceiling for the

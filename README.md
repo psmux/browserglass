@@ -349,6 +349,7 @@ All of them expect `pnpm install && pnpm -r build` at the repo root first.
 * The Docker and Kubernetes runtimes are placeholders. Use `host` for local Chrome, or `remote` for Chrome you run in containers yourself.
 * Several gateways can share placement through one store, but a viewer cannot yet attach to a browser on another node.
 * Some CLI commands (`profiles`, `sessions`, `tenants`, `pools`, `backup` and a few more) print "not implemented".
+* Screenshots, PDFs and recording starts are rate limited per tab: 5 a second with a burst of 10 by default. If you need more, raise it with `bgls serve --capture-rate 20` or `BGLS_CAPTURE_RATE_PER_SEC` (see [`docs/scaling.md`](docs/scaling.md#per-connection-rate-limits)).
 
 ## Guides
 

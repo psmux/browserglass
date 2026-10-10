@@ -130,14 +130,14 @@ The whole JSON envelope is parsed first (`JSON.parse` on the raw message), but t
 |---|---|---|
 | input (`input.*`) | 300 per second | per `(viewer, targetId)` |
 | control (`control.*`) | 60 per second, burst 120 | per `(viewer, targetId)` |
-| nav (`nav.*`) | 4 per second, burst 8 | per connection |
+| nav (`nav.*`) | 4 per second, burst 8 | per target |
 | cursor (`presence.cursor`, `presence.viewport`, `target.probe` with `detail: 'hover'`) | 20 per second, burst 40 | per connection |
 | probe full (`target.probe` with `detail: 'full'`) | 2 per second, burst 4 | per target |
-| capture (`target.capture`) | 1 per second | per connection |
+| capture (`target.capture`, `page.pdf.get`, `recording.start`) | 5 per second, burst 10 (operator configurable) | per target |
 | ack (`ack`) | 200 per second, burst 400 | per stream |
 | console / pageError / network (outbound `console.entry` / `page.error` / `network.request` and `network.summary`) | 20/s burst 40, 5/s burst 10, 30/s burst 60 respectively | per target |
 
-`input` and `control` are scoped per `(viewer, targetId)`, not once for the whole connection, specifically so driving several targets at once (this build's whole point) does not have one target's input traffic starve another's. `probe full` and `ack` are scoped even more narrowly, per target and per stream respectively, for the same reason, found the same way: a connection wide `ack` budget of 200 per second cannot keep up with three simultaneous live streams at roughly 100 fps each, and once one stream's acks start being refused its frame backlog can never drain (see the binary frames section above). A rate limited message gets back a non-fatal `error` (`bgls.error.limit.rate`, with `retryAfterMs`), never a close.
+`input` and `control` are scoped per `(viewer, targetId)`, not once for the whole connection, specifically so driving several targets at once (this build's whole point) does not have one target's input traffic starve another's. `probe full` and `ack` are scoped even more narrowly, per target and per stream respectively, for the same reason, found the same way: a connection wide `ack` budget of 200 per second cannot keep up with three simultaneous live streams at roughly 100 fps each, and once one stream's acks start being refused its frame backlog can never drain (see the binary frames section above). `capture` and `nav` are per target too, so a script screenshotting four tabs gets four budgets. A rate limited message gets back a non-fatal `error` (`bgls.error.limit.rate`, with `retryAfterMs`), never a close. `retryAfterMs` is the time until that bucket holds a token again, so a client that waits exactly that long and resends will get through. The Node and Python automation clients do this once for `screenshot()` (and `pdf()` in Node) before giving up.
 
 There is also a raw per socket inbound byte budget, 8 MiB per minute by default, checked ahead of every named bucket above; a message that exceeds it never reaches type dispatch at all.
 

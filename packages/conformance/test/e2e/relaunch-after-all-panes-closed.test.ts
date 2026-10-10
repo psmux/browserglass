@@ -174,24 +174,14 @@ describe.skipIf(noDisplay)(
       // would be operating on a stale or dead transport and would time out
       // or throw.
       //
-      // Sequential, not `Promise.all`: `target.capture` is rate limited to
-      // `captureRatePerSec: 1` per viewer (`@browserglass/protocol`'s
-      // `DEFAULT_LIMITS`), which is a wire-layer concern unrelated to the
-      // relaunch fix under test here; three at once trips it and answers
-      // with `bgls.error.rate_limited` instead of a screenshot. The
-      // `target.new` race just above stays fully concurrent, since that is
-      // the actual behaviour this file exists to prove.
-      //
-      // The leading sleep is the same rate limit's own recovery, not the
-      // fix under test: the previous `it()` already spent this connection's
-      // one `capture` token, and a fast relaunch (this one, reusing a
-      // recently-launched profile) can land here well under the 1 token per
-      // second refill.
-      await sleep(1100);
+      // These used to be spaced 1.1s apart because `target.capture` was
+      // limited to one per second per connection. The capture bucket is
+      // per target now (`captureRate` in `@browserglass/protocol`'s
+      // `DEFAULT_LIMITS`), so each tab has its own budget and no pacing is
+      // needed.
       for (const targetId of ids) {
         const capture = await client.capture(targetId);
         expect(capture.blob.size).toBeGreaterThan(0);
-        await sleep(1100);
       }
 
       await Promise.all(ids.map((targetId) => client.tabs.close(targetId)));
