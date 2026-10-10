@@ -116,12 +116,6 @@ try {
       document.body.style.cssText =
         'margin:0;height:100vh;display:grid;place-items:center;background:#161b22;color:#8b949e;font:600 64px system-ui,Segoe UI,sans-serif';
       document.body.textContent = `Browser ${n}, ready`;
-      // A slow pulse keeps frames coming, so every pane has a picture
-      // before the sites start loading.
-      document.body.animate([{ opacity: 1 }, { opacity: 0.55 }, { opacity: 1 }], {
-        duration: 1600,
-        iterations: Number.POSITIVE_INFINITY,
-      });
     }, i + 1);
   });
 
