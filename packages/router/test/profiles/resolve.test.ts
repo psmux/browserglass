@@ -157,6 +157,11 @@ describe('ProfileService.resolve', () => {
       spec: { mode: 'persistent', key: 'user:shared2' },
     });
     expect(result.kind).toBe('reuse');
-    if (result.kind === 'reuse') expect(result.instanceId).toBe('inst_owner');
+    if (result.kind === 'reuse') {
+      expect(result.instanceId).toBe('inst_owner');
+      // The router still needs the resolved key to run its own share check.
+      expect(result.resolved.key).toBe('user:shared2');
+      expect(result.resolved.profileId).toBe(result.profileId);
+    }
   });
 });

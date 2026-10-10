@@ -140,7 +140,12 @@ describe('a persistent profile whose holder is dead', () => {
     // `shareMinRemainingMs` far beyond the holder's remaining lifetime,
     // so `canShare` refuses it `expiring_soon`. A live holder that cannot
     // be shared with is a real conflict and must still be reported as one.
-    const { outcome } = await setUp('live', 10_000_000_000);
+    const { outcome, holderId } = await setUp('live', 10_000_000_000);
     expect(outcome.kind).toBe('busy');
+    // And it says which holder and why, so the caller's error can too.
+    if (outcome.kind === 'busy') {
+      expect(outcome.holder.id).toBe(holderId);
+      expect(outcome.reason).toBe('expiring_soon');
+    }
   });
 });

@@ -262,12 +262,17 @@ export class ProfileService {
               instanceId: lease.holderInstanceId,
               profileId: existing.id,
               nodeId: lease.holderNodeId,
+              resolved: { ...resolved, profileId: existing.id },
             };
           }
           return {
             kind: 'error',
             code: 'E_PROFILE_BUSY',
-            detail: { holderAppId: holder?.appId ?? null, expiresAt: lease.expiresAt },
+            detail: {
+              holderInstanceId: lease.holderInstanceId,
+              holderAppId: holder?.appId ?? null,
+              expiresAt: lease.expiresAt,
+            },
           };
         }
         return { kind: 'error', code: 'E_PROFILE_BUSY', detail: { expiresAt: lease.expiresAt } };

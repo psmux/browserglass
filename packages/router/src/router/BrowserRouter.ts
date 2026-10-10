@@ -75,7 +75,7 @@ import {
 import { CachedQuotaResolver } from '../quota/resolve.js';
 import type { Clock, ClockTimer } from './clock.js';
 import { DEFAULT_ROUTER_CONFIG, type RouterConfig } from './config.js';
-import { routerErr } from './errors.js';
+import { type RouterError, routerErr } from './errors.js';
 import { IdempotencyTable } from './idempotency.js';
 import { MetadataValidationError, validateAcquireMetadata } from './instanceMetadata.js';
 import {
@@ -87,7 +87,7 @@ import {
   isTtlExpired,
 } from './lifecycle.js';
 import { type RouterLogger, consoleWarnRouterLogger, errorLogFields } from './logger.js';
-import { findReusable } from './reuse.js';
+import { type ReuseOutcome, findReusable } from './reuse.js';
 import { profileSpecFromResolved, toStoredSpecInput } from './specMapping.js';
 import {
   type AcquireHandle,
@@ -858,6 +858,13 @@ export class BrowserRouter {
       policy: 'default',
     }));
     const specRow = await this.store.upsertBrowserSpec(principal.tenantId, toStoredSpecInput(spec));
+    // `resolve` only turns the spec into a resolved key (creating the
+    // profile row on a first use). It does not refuse a profile because its
+    // lease is held: whether a held persistent profile is shared with this
+    // caller or refused is `findReusable`'s call, just below, and whether a
+    // dead holder's lease can be taken over is `lease()`'s. The real
+    // adapter used to throw `E_PROFILE_BUSY` right here for any held key,
+    // which meant the profile sharing branch below never ran at all.
     const { resolved: profileSpec } = await this.profiles.resolve({
       tenantId: principal.tenantId,
       appId: principal.appId,
@@ -891,6 +898,21 @@ export class BrowserRouter {
       store: this.store,
       ownerServable: (instance) => this.ownerServable(instance),
     });
+    // A narrowed token may only be handed an instance its scope covers,
+    // the same rule `attach()` and the attach-by-instanceId branch apply.
+    // For a shared profile there is no other browser to offer instead, so
+    // the answer is busy, said plainly.
+    if (
+      reuse.kind === 'found' &&
+      reuse.why === 'profile-shared' &&
+      !scopeAllowsInstanceRow(principal.scope, reuse.instance.id, reuse.instance.poolId)
+    ) {
+      throw routerErr(
+        'E_PROFILE_BUSY',
+        `profile "${profileSpec.key}" is in use by another instance, and this token's scope does not cover that instance, so it cannot be shared with this request`,
+        { details: { reason: 'out_of_scope' } },
+      );
+    }
     if (reuse.kind === 'found') {
       this.audit.emit({
         k: 'instance.acquired',
@@ -910,10 +932,7 @@ export class BrowserRouter {
         timings,
       });
     }
-    if (reuse.kind === 'busy')
-      throw routerErr('E_PROFILE_BUSY', 'profile already leased', {
-        details: { holderAppId: reuse.holderAppId },
-      });
+    if (reuse.kind === 'busy') throw profileBusyError(profileSpec.key, reuse, this.clock.now());
 
     // 5. admission
     const admissionStart = this.clock.now();
@@ -3002,4 +3021,61 @@ function nodeToSnapshot(n: Node): NodeSnapshot {
     lastHeartbeatAt: n.lastHeartbeatAt,
     hostsProfiles: n.hostsProfiles,
   };
+}
+
+/**
+ * The `E_PROFILE_BUSY` a held persistent profile earns when its holder may
+ * not be shared with this request. One message per `canShare` refusal, so
+ * the caller learns why rather than only that the profile is taken, and a
+ * `retryAfterMs` where waiting can change the answer.
+ */
+function profileBusyError(
+  key: string,
+  busy: Extract<ReuseOutcome, { kind: 'busy' }>,
+  now: number,
+): RouterError {
+  const holder = busy.holder;
+  const prefix = `profile "${key}" is in use by instance ${holder.id}`;
+  const details = {
+    holderInstanceId: holder.id,
+    holderAppId: busy.holderAppId,
+    reason: busy.reason,
+    ...(busy.conflicts !== undefined ? { conflicts: busy.conflicts } : {}),
+  };
+  switch (busy.reason) {
+    case 'not_ready':
+      return routerErr(
+        'E_PROFILE_BUSY',
+        `${prefix}, which is ${holder.state} and can be shared once it is ready; retry shortly`,
+        { details, retryAfterMs: 1000 },
+      );
+    case 'expiring_soon':
+      return routerErr(
+        'E_PROFILE_BUSY',
+        `${prefix}, which ends in ${Math.max(0, Math.ceil((holder.expiresAt - now) / 1000))}s, too soon to share; retry once it has ended`,
+        { details, retryAfterMs: Math.max(1000, holder.expiresAt - now) },
+      );
+    case 'cross_app':
+      return routerErr(
+        'E_PROFILE_BUSY',
+        `${prefix}, which belongs to another app that has not granted this app write access to the profile`,
+        { details },
+      );
+    case 'cross_tenant':
+      return routerErr('E_PROFILE_BUSY', `${prefix}, which belongs to another tenant`, {
+        details,
+      });
+    case 'spec_conflict':
+      return routerErr(
+        'E_PROFILE_BUSY',
+        `${prefix}, whose browser settings differ from this request on ${(busy.conflicts ?? []).join(', ')}; a running browser cannot change those, so ask with matching settings or release it first`,
+        { details },
+      );
+    case 'viewer_limit':
+      return routerErr(
+        'E_PROFILE_BUSY',
+        `${prefix}, which is already at its viewer limit, so it cannot take another client`,
+        { details },
+      );
+  }
 }

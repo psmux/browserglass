@@ -89,7 +89,19 @@ export interface ResolveRequest {
  * not represented.
  */
 export type ResolveResult =
-  | { kind: 'reuse'; instanceId: string; profileId: string; nodeId: string | null }
+  | {
+      kind: 'reuse';
+      instanceId: string;
+      profileId: string;
+      nodeId: string | null;
+      /**
+       * The same resolved spec a `lease` result would carry. A caller that
+       * decides for itself whether to share the holder (the router does,
+       * through `findReusable` and `canShare`) still needs the key, and
+       * without this it had nowhere to get it from.
+       */
+      resolved: ResolvedProfileSpec;
+    }
   | {
       kind: 'lease';
       profileId: string | null;
