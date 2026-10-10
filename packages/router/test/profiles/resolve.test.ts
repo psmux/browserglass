@@ -66,6 +66,26 @@ describe('ProfileService.resolve', () => {
     expect(row).not.toBeNull();
   });
 
+  it('two concurrent first resolves of one key never surface the raw UNIQUE constraint error', async () => {
+    const req = {
+      tenantId: basics.tenantId,
+      appId: basics.appId,
+      instanceId: 'pending',
+      spec: { mode: 'persistent' as const, key: 'user:race' },
+      dryRun: false,
+    };
+    const results = await Promise.all([service.resolve(req), service.resolve(req)]);
+    const created = results.filter((r) => r.kind === 'lease' && r.created);
+    expect(created).toHaveLength(1);
+    for (const r of results) {
+      if (r.kind === 'error') {
+        // The loser sees the winner's row mid create: a wait, not a failure.
+        expect(r.code).toBe('E_PROFILE_BUSY');
+        expect(typeof r.detail['retryAfterMs']).toBe('number');
+      }
+    }
+  });
+
   it('rejects a reserved key prefix as an error result', async () => {
     const result = await service.resolve({
       tenantId: basics.tenantId,

@@ -65,8 +65,10 @@ export class ProfileServicePortAdapter implements ProfileServicePort {
     // even considered, and the router's `profile-shared` reuse never
     // happened outside tests whose fake port did not throw.
     if (result.kind === 'reuse') return { resolved: result.resolved, created: false };
+    const retryAfterMs = result.detail['retryAfterMs'];
     throw profileErr(result.code, describeResolveError(result.code, result.detail), {
       details: result.detail,
+      ...(typeof retryAfterMs === 'number' ? { retryAfterMs } : {}),
     });
   }
 

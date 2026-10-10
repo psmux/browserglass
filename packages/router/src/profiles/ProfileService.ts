@@ -195,26 +195,37 @@ export class ProfileService {
       };
     }
 
-    const existing = await this.store.getProfileByKey(req.tenantId, req.appId, rawKey);
-    if (!existing) {
-      if (dryRun) {
+    let existing = await this.store.getProfileByKey(req.tenantId, req.appId, rawKey);
+    if (!existing && !dryRun) {
+      // Two first acquires of one key arrive together and both find no
+      // row. One INSERT wins; the other used to surface the raw UNIQUE
+      // constraint error to its caller. The loser reads the winner's row
+      // instead and resolves against it like any later acquire.
+      try {
+        const created = await this.createProfileRow(req.tenantId, req.appId, rawKey, resolved);
         return {
           kind: 'lease',
-          profileId: null,
-          eligibleNodeIds: null,
-          resolved,
+          profileId: created.id,
+          eligibleNodeIds: created.homeNodeId ? [created.homeNodeId] : null,
+          resolved: { ...resolved, profileId: created.id },
           estimatedMaterialiseMs: resolved.templateId ? 800 : 300,
-          created: false,
+          created: true,
         };
+      } catch (err) {
+        if (!isUniqueConstraintError(err)) throw err;
+        existing = await this.store.getProfileByKey(req.tenantId, req.appId, rawKey);
+        if (!existing) throw err;
       }
-      const created = await this.createProfileRow(req.tenantId, req.appId, rawKey, resolved);
+    }
+    if (!existing) {
+      // Only a dry run gets here: a real resolve created the row above.
       return {
         kind: 'lease',
-        profileId: created.id,
-        eligibleNodeIds: created.homeNodeId ? [created.homeNodeId] : null,
-        resolved: { ...resolved, profileId: created.id },
+        profileId: null,
+        eligibleNodeIds: null,
+        resolved,
         estimatedMaterialiseMs: resolved.templateId ? 800 : 300,
-        created: true,
+        created: false,
       };
     }
 

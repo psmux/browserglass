@@ -105,6 +105,24 @@ describe('a persistent profile held by a running browser', () => {
     expect(nodes.launchCount).toBe(1);
   });
 
+  it('gives two acquires started together one browser', async () => {
+    const { router, nodes, principal, clock } = await setUp();
+    // The loser of the race waits on the router clock for the winner to
+    // finish launching; keep that clock moving.
+    const ticker = setInterval(() => clock.advance(250), 5);
+    try {
+      const [a, b] = await Promise.all([
+        router.acquire({ profile: { mode: 'persistent', key: KEY } }, principal),
+        router.acquire({ profile: { mode: 'persistent', key: KEY } }, principal),
+      ]);
+      expect(b.result.instanceId).toBe(a.result.instanceId);
+      expect([a.result.reuseReason, b.result.reuseReason]).toContain('profile-shared');
+      expect(nodes.launchCount).toBe(1);
+    } finally {
+      clearInterval(ticker);
+    }
+  });
+
   it('refuses with the reason when the request asks for different browser settings', async () => {
     const { router, nodes, principal } = await setUp();
     await router.acquire({ profile: { mode: 'persistent', key: KEY } }, principal);

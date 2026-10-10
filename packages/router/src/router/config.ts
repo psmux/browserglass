@@ -61,6 +61,14 @@ export interface RouterConfig {
 
   // reuse and warm
   shareMinRemainingMs: number;
+  /**
+   * How long an acquire naming a persistent profile waits for that
+   * profile's holder to finish launching, so it can share the browser
+   * rather than be refused. Two scripts started together with the same
+   * key otherwise race: one launches, the other is told the profile is
+   * busy. Zero turns the wait off.
+   */
+  profileShareWaitMs: number;
   warmReconcileMs: number;
   warmLaunchBurst: number;
   warmSafetyFactor: number;
@@ -152,6 +160,7 @@ export const DEFAULT_ROUTER_CONFIG: RouterConfig = Object.freeze({
   drainMigrateMaxBytes: 1_073_741_824,
 
   shareMinRemainingMs: 60_000,
+  profileShareWaitMs: 30_000,
   warmReconcileMs: 10_000,
   warmLaunchBurst: 2,
   warmSafetyFactor: 1.5,

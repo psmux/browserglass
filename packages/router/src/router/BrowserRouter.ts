@@ -87,7 +87,7 @@ import {
   isTtlExpired,
 } from './lifecycle.js';
 import { type RouterLogger, consoleWarnRouterLogger, errorLogFields } from './logger.js';
-import { type ReuseOutcome, findReusable } from './reuse.js';
+import { type FindReusableRequest, type ReuseOutcome, findReusable } from './reuse.js';
 import { profileSpecFromResolved, toStoredSpecInput } from './specMapping.js';
 import {
   type AcquireHandle,
@@ -107,6 +107,7 @@ import {
   type LiveViewerPort,
   type ProfileLeaseGrant,
   type ProfileServicePort,
+  type ResolvedProfileSpecResult,
   type ReleaseOptions,
   type ReleaseResult,
   type RestartOptions,
@@ -730,6 +731,64 @@ export class BrowserRouter {
     return { result, ready: this.readyPromiseFor(result) };
   }
 
+  /**
+   * `profiles.resolve`, waiting out a profile row another acquire is in
+   * the middle of creating (or snapshotting, or migrating). Two first
+   * acquires of one key started together both reach this point; the one
+   * that loses the row INSERT finds the row still `creating`, and a short
+   * wait turns that into the ordinary "held by a launching instance" case
+   * that {@link findReusableAfterLaunch} then shares. Only a refusal that
+   * carries `retryAfterMs` is waited on, so a real conflict still answers
+   * at once. Bounded by `profileShareWaitMs`.
+   */
+  private async resolveProfileWaitingForCreate(
+    req: Parameters<ProfileServicePort['resolve']>[0],
+  ): Promise<ResolvedProfileSpecResult> {
+    const deadline = this.clock.now() + this.config.profileShareWaitMs;
+    for (;;) {
+      try {
+        return await this.profiles.resolve(req);
+      } catch (e) {
+        const retryAfterMs = (e as { retryAfterMs?: unknown }).retryAfterMs;
+        if (
+          errorCodeOf(e) !== 'E_PROFILE_BUSY' ||
+          typeof retryAfterMs !== 'number' ||
+          this.clock.now() >= deadline
+        ) {
+          throw e;
+        }
+      }
+      await new Promise<void>((resolve) => {
+        this.clock.setTimeout(resolve, PROFILE_SHARE_POLL_MS);
+      });
+    }
+  }
+
+  /**
+   * `findReusable`, waiting out a persistent profile holder that is still
+   * launching. Without the wait, the second of two acquires started
+   * together with one key was refused `E_PROFILE_BUSY` a second before
+   * the browser it should have shared became ready. Bounded by
+   * `profileShareWaitMs`; any other answer comes back at once.
+   */
+  private async findReusableAfterLaunch(req: FindReusableRequest): Promise<ReuseOutcome> {
+    const deadline = this.clock.now() + this.config.profileShareWaitMs;
+    for (;;) {
+      const outcome = await findReusable(req);
+      if (
+        outcome.kind !== 'busy' ||
+        outcome.reason !== 'not_ready' ||
+        !HOLDER_STILL_LAUNCHING.has(outcome.holder.state) ||
+        this.clock.now() >= deadline
+      ) {
+        return outcome;
+      }
+      await new Promise<void>((resolve) => {
+        this.clock.setTimeout(resolve, PROFILE_SHARE_POLL_MS);
+      });
+    }
+  }
+
   private readyPromiseFor(result: AcquireResult): Promise<AcquireResult> {
     if (result.state !== 'queued') return Promise.resolve(result);
     // The correlation key for `readyDeferreds` was always the
@@ -865,7 +924,7 @@ export class BrowserRouter {
     // dead holder's lease can be taken over is `lease()`'s. The real
     // adapter used to throw `E_PROFILE_BUSY` right here for any held key,
     // which meant the profile sharing branch below never ran at all.
-    const { resolved: profileSpec } = await this.profiles.resolve({
+    const { resolved: profileSpec } = await this.resolveProfileWaitingForCreate({
       tenantId: principal.tenantId,
       appId: principal.appId,
       spec: req.profile ?? pool.profileTemplate,
@@ -873,7 +932,7 @@ export class BrowserRouter {
     });
 
     // 4. reuse check, BEFORE admission (reuse consumes no new quota slot)
-    const reuse = await findReusable({
+    const reuseRequest: FindReusableRequest = {
       tenantId: principal.tenantId,
       appId: principal.appId,
       principal,
@@ -897,42 +956,52 @@ export class BrowserRouter {
       clock: this.clock,
       store: this.store,
       ownerServable: (instance) => this.ownerServable(instance),
-    });
-    // A narrowed token may only be handed an instance its scope covers,
-    // the same rule `attach()` and the attach-by-instanceId branch apply.
-    // For a shared profile there is no other browser to offer instead, so
-    // the answer is busy, said plainly.
-    if (
-      reuse.kind === 'found' &&
-      reuse.why === 'profile-shared' &&
-      !scopeAllowsInstanceRow(principal.scope, reuse.instance.id, reuse.instance.poolId)
-    ) {
-      throw routerErr(
-        'E_PROFILE_BUSY',
-        `profile "${profileSpec.key}" is in use by another instance, and this token's scope does not cover that instance, so it cannot be shared with this request`,
-        { details: { reason: 'out_of_scope' } },
-      );
-    }
-    if (reuse.kind === 'found') {
+    };
+    // Turns a reuse outcome into this acquire's answer: the shared or
+    // adopted instance, a refusal that says why, or `null` to go on and
+    // launch.
+    const answerFromReuse = async (outcome: ReuseOutcome): Promise<AcquireResult | null> => {
+      // A narrowed token may only be handed an instance its scope covers,
+      // the same rule `attach()` and the attach-by-instanceId branch apply.
+      // For a shared profile there is no other browser to offer instead, so
+      // the answer is busy, said plainly.
+      if (
+        outcome.kind === 'found' &&
+        outcome.why === 'profile-shared' &&
+        !scopeAllowsInstanceRow(principal.scope, outcome.instance.id, outcome.instance.poolId)
+      ) {
+        throw routerErr(
+          'E_PROFILE_BUSY',
+          `profile "${profileSpec.key}" is in use by another instance, and this token's scope does not cover that instance, so it cannot be shared with this request`,
+          { details: { reason: 'out_of_scope' } },
+        );
+      }
+      if (outcome.kind === 'busy') {
+        throw profileBusyError(profileSpec.key, outcome, this.clock.now());
+      }
+      if (outcome.kind !== 'found') return null;
       this.audit.emit({
         k: 'instance.acquired',
         tid: principal.tenantId,
         aid: principal.appId,
-        iid: reuse.instance.id,
-        nid: reuse.instance.nodeId ?? '',
+        iid: outcome.instance.id,
+        nid: outcome.instance.nodeId ?? '',
         profileKey: profileSpec.key,
         reused: true,
         at: this.clock.now(),
       });
       timings.totalMs = this.clock.now() - t0;
-      return this.buildResult(reuse.instance, principal, {
+      return this.buildResult(outcome.instance, principal, {
         reused: true,
-        reuseReason: reuse.why,
+        reuseReason: outcome.why,
         rejectedOverrides,
         timings,
       });
-    }
-    if (reuse.kind === 'busy') throw profileBusyError(profileSpec.key, reuse, this.clock.now());
+    };
+    const reuse = await this.findReusableAfterLaunch(reuseRequest);
+    const reused = await answerFromReuse(reuse);
+    if (reused) return reused;
+    const abandonedHolder = reuse.kind === 'none' ? reuse.abandonedHolder : undefined;
 
     // 5. admission
     const admissionStart = this.clock.now();
@@ -988,8 +1057,8 @@ export class BrowserRouter {
       // A row left behind by a gateway that is gone still holds this
       // profile's lease. Reclaim it now instead of answering
       // E_PROFILE_BUSY until it expires; see `reclaimAbandonedHolder`.
-      ...(reuse.abandonedHolder !== undefined && !this.reachesPeerNodes
-        ? { reclaimFromHolder: reuse.abandonedHolder }
+      ...(abandonedHolder !== undefined && !this.reachesPeerNodes
+        ? { reclaimFromHolder: abandonedHolder }
         : {}),
     };
     try {
@@ -1000,6 +1069,14 @@ export class BrowserRouter {
       }
       return result;
     } catch (e) {
+      // Two acquires of one persistent key that both found nothing to
+      // share race to the lease, and the loser lands here. The winner is
+      // the browser it should share, so ask again rather than refuse.
+      if (errorCodeOf(e) === 'E_PROFILE_BUSY' && reuseRequest.profileKey !== null) {
+        const again = await answerFromReuse(await this.findReusableAfterLaunch(reuseRequest));
+        if (again) return again;
+        throw e;
+      }
       if (!isAdmissionRefusedError(e)) throw e;
       // The atomic reservation lost the race `admit()`'s advisory read
       // missed. Apply the pool's onFull policy against that hard result.
@@ -3022,6 +3099,12 @@ function nodeToSnapshot(n: Node): NodeSnapshot {
     hostsProfiles: n.hostsProfiles,
   };
 }
+
+/** Holder states that will become shareable on their own if waited for. */
+const HOLDER_STILL_LAUNCHING: ReadonlySet<string> = new Set(['requested', 'placing', 'launching']);
+
+/** How often `findReusableAfterLaunch` looks again at a launching holder. */
+const PROFILE_SHARE_POLL_MS = 250;
 
 /**
  * The `E_PROFILE_BUSY` a held persistent profile earns when its holder may
