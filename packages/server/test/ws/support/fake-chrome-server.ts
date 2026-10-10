@@ -148,6 +148,13 @@ export interface FakeChromeServer {
   failNextCaptureScreenshots(count: number): void;
   /** How many `Page.captureScreenshot` calls this server has answered or failed so far. */
   readonly captureScreenshotCalls: number;
+  /**
+   * Holds every `Page.captureScreenshot` reply until the returned function
+   * is called, the way Chrome can hold a capture of a hidden tab. Replies
+   * held so far are sent when it is called, and later captures answer at
+   * once again.
+   */
+  holdCaptureScreenshots(): () => void;
   /** Overrides what `Page.printToPDF` replies with, as `{data: base64Data}` (default a small fixed placeholder). Lets a test control the byte count `ManagedSession.pdf()` measures to decide inline-versus-download delivery. */
   setPrintToPdf(base64Data: string): void;
   /** Sets what `Page.getLayoutMetrics` replies with as `cssLayoutViewport`. Unset (the default), the handler falls through to the catch-all `reply({})`, matching real Chrome's shape for a target whose metrics were never queried, and `queryRealViewport()` treats that as "unknown" the same way. */
@@ -386,6 +393,7 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
   let captureScreenshotBase64 = ONE_PX_JPEG_BASE64;
   let captureScreenshotFailures = 0;
   let captureScreenshotCalls = 0;
+  let heldCaptureReplies: Array<() => void> | null = null;
   let printToPdfBase64 = TINY_PDF_BASE64;
   const runtimeEvaluateCalls: Array<{
     params: Record<string, unknown>;
@@ -740,6 +748,11 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
           );
           return;
         }
+        if (heldCaptureReplies) {
+          const data = captureScreenshotBase64;
+          heldCaptureReplies.push(() => reply({ data }));
+          return;
+        }
         reply({ data: captureScreenshotBase64 });
         return;
       }
@@ -869,6 +882,14 @@ export async function startFakeChromeServer(): Promise<FakeChromeServer> {
     },
     get captureScreenshotCalls() {
       return captureScreenshotCalls;
+    },
+    holdCaptureScreenshots() {
+      const held: Array<() => void> = [];
+      heldCaptureReplies = held;
+      return () => {
+        if (heldCaptureReplies === held) heldCaptureReplies = null;
+        for (const send of held.splice(0)) send();
+      };
     },
     setPrintToPdf(base64Data) {
       printToPdfBase64 = base64Data;

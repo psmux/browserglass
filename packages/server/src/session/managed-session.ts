@@ -761,6 +761,14 @@ export type NavigateWaitUntil = 'commit' | 'load';
 /** How long `nav.goto` with `waitUntil: 'load'` waits for the load event when the request names no `timeoutMs`. Matches the 30s page load budget the rest of the stack uses (`@browserglass/core`'s `cdp/timeouts.ts`). */
 export const DEFAULT_NAV_LOAD_TIMEOUT_MS = 30_000;
 
+/**
+ * The longest a navigation waits for a forced capture already in flight on
+ * the same target (see `ManagedSession.navigate`). A capture normally takes
+ * well under a second, even on a hidden tab. This only caps the wait for a
+ * capture Chrome is holding for longer than that.
+ */
+export const FORCED_FRAME_NAV_WAIT_MS = 3000;
+
 /** Upper bound on a caller supplied `nav.goto` `timeoutMs`. */
 export const MAX_NAV_LOAD_TIMEOUT_MS = 120_000;
 
@@ -2290,6 +2298,23 @@ export class ManagedSession {
     return p;
   }
 
+  /**
+   * Resolves once no forced capture is in flight for `targetId`, or after
+   * {@link FORCED_FRAME_NAV_WAIT_MS}, whichever comes first. Never rejects.
+   */
+  private async forcedFrameSettled(targetId: string): Promise<void> {
+    const inflight = this.forcedFrameInflight.get(targetId);
+    if (!inflight) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      inflight,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, FORCED_FRAME_NAV_WAIT_MS);
+      }),
+    ]);
+    clearTimeout(timer);
+  }
+
   // ── diagnostics ──────────────────────────────────────────────────────
 
   /** The union of every subscribed viewer's requested feeds for one target: what `core.Session`'s single, shared, per-target collector actually needs running. */
@@ -3191,6 +3216,17 @@ export class ManagedSession {
       readonly timeoutMs?: number;
     },
   ): Promise<NavStatePayload | null> {
+    // A new viewer's first frame is captured after its `stream.subscribed`
+    // reply, so a client can subscribe and navigate straight away while
+    // that `Page.captureScreenshot` is still running. On a hidden tab
+    // Chrome then holds the navigation until the capture finishes, and the
+    // navigation can come out replacing the current history entry instead
+    // of adding one: seen on the macOS and Windows CI runners as a second
+    // page that never made back available. So a navigation lets an
+    // in-flight forced capture finish first, as it did when that capture
+    // ran inside the subscribe. `stop` does not wait: it should take
+    // effect at once.
+    if (kind !== 'stop') await this.forcedFrameSettled(targetId);
     const handle = await this.ensureAttached(targetId);
     if (!handle) throw new Error(`target ${targetId} has no live CDP session`);
     const sessionId = handle.id as never;

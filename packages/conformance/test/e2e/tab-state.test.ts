@@ -26,7 +26,6 @@ let gateway: RealGateway;
 let fixture: FixtureServer;
 
 beforeAll(async () => {
-  process.env['BGLS_TRACE_NAV'] = '1';
   [gateway, fixture] = await Promise.all([
     startRealGateway({ headless: 'new' }),
     startFixtureServer(),
@@ -34,7 +33,6 @@ beforeAll(async () => {
 }, 180_000);
 
 afterAll(async () => {
-  delete process.env['BGLS_TRACE_NAV'];
   await Promise.all([gateway?.close(), fixture?.close()]);
 }, 120_000);
 
@@ -101,10 +99,8 @@ describe('tab state a tab strip actually renders', () => {
     // `Page` domain on this tab. Without it the first assertion could read a
     // tab whose history has not been looked at yet and pass on the default
     // rather than on the answer.
-    console.error('[TRACE]', Date.now()%100000, 'TEST subscribe start');
     await client.subscribe(targetId);
-    console.error('[TRACE]', Date.now()%100000, 'TEST subscribed');
-    
+
     const atStart = await tabUntil(
       client,
       targetId,
@@ -114,26 +110,18 @@ describe('tab state a tab strip actually renders', () => {
     expect(atStart, 'the new tab never settled on its first page').toBeDefined();
     expect(history(atStart)).toBe('canGoBack=false canGoForward=false');
 
-    console.error('[TRACE]', Date.now()%100000, 'TEST navigate');
     await client.navigate(targetId, fixture.pageUrl('hist-b'));
-    console.error('[TRACE]', Date.now()%100000, 'TEST navigated');
-    
     const afterForward = await tabUntil(client, targetId, (t) => t.canGoBack, 30_000);
-    console.error('[TRACE]', Date.now()%100000, 'TEST afterForward ' + JSON.stringify(afterForward) + ' list ' + JSON.stringify((await client.tabs.list()).find((t) => t.targetId === targetId)));
     expect(afterForward, 'a second page in the same tab did not make back available').toBeDefined();
     expect(history(afterForward)).toBe('canGoBack=true canGoForward=false');
 
-    console.error('[TRACE]', Date.now()%100000, 'TEST back');
     await client.back(targetId);
-    console.error('[TRACE]', Date.now()%100000, 'TEST backed');
-    
     const afterBack = await tabUntil(client, targetId, (t) => t.canGoForward, 30_000);
     expect(afterBack, 'going back did not make forward available').toBeDefined();
     expect(history(afterBack)).toBe('canGoBack=false canGoForward=true');
 
     // And the tab really is showing the earlier page again, not merely
     // reporting that it could.
-    console.error('[TRACE]', Date.now()%100000, 'TEST afterBack ' + JSON.stringify(afterBack) + '');
     expect(afterBack?.url).toContain('hist-a');
 
     await client.tabs.close(targetId);

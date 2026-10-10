@@ -952,3 +952,97 @@ describe('TargetRegistry.setWindowBounds', () => {
     await expect(registry.setWindowBounds(5, { width: 100 })).resolves.toBeUndefined();
   });
 });
+
+describe('TargetRegistry navigation history', () => {
+  it('a history reading after a navigation carries the new URL with it, before any targetInfoChanged', async () => {
+    // `Target.targetInfoChanged` is debounced, so the URL used to trail the
+    // back and forward flags: a tab strip could show forward available
+    // next to the page it had just gone back from.
+    const { registry, world, socket } = await startFakeRegistry();
+    world.targetInfos.push({
+      targetId: 'T1',
+      type: 'page',
+      title: 'a',
+      url: 'https://example.com/a',
+      attached: false,
+    });
+    await registry.resync();
+    const target = registry.all()[0]!;
+    let history = { currentIndex: 0, entries: [{ url: 'https://example.com/a' }] };
+    const defaultRespond = socket.autoRespond;
+    socket.autoRespond = (msg, s) => {
+      if (msg.method === 'Page.getNavigationHistory') {
+        s.emitResult(msg.id, history);
+        return;
+      }
+      defaultRespond?.(msg, s);
+    };
+    const handle = await registry.attach(target.id);
+    await vi.waitFor(() => expect(socket.allSent('Page.getNavigationHistory').length).toBe(1));
+
+    history = {
+      currentIndex: 1,
+      entries: [{ url: 'https://example.com/a' }, { url: 'https://example.com/b' }],
+    };
+    socket.emitEvent('Page.frameNavigated', { frame: { id: 'F1' } }, handle.id);
+    await vi.waitFor(() => expect(target.canGoBack).toBe(true));
+    expect(target.url).toBe('https://example.com/b');
+
+    history = { ...history, currentIndex: 0 };
+    socket.emitEvent('Page.frameNavigated', { frame: { id: 'F1' } }, handle.id);
+    await vi.waitFor(() => expect(target.canGoForward).toBe(true));
+    expect(target.canGoBack).toBe(false);
+    expect(target.url).toBe('https://example.com/a');
+  });
+
+  it("leaves a Chrome page's URL to targetInfoChanged, which can spell it differently from the history entry", async () => {
+    const { registry, world, socket } = await startFakeRegistry();
+    world.targetInfos.push({
+      targetId: 'T1',
+      type: 'page',
+      title: 'New Tab',
+      url: 'chrome://newtab/',
+      attached: false,
+    });
+    await registry.resync();
+    const target = registry.all()[0]!;
+    const defaultRespond = socket.autoRespond;
+    socket.autoRespond = (msg, s) => {
+      if (msg.method === 'Page.getNavigationHistory') {
+        s.emitResult(msg.id, { currentIndex: 0, entries: [{ url: 'chrome://new-tab-page/' }] });
+        return;
+      }
+      defaultRespond?.(msg, s);
+    };
+    await registry.attach(target.id);
+    await vi.waitFor(() => expect(socket.allSent('Page.getNavigationHistory').length).toBe(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(target.url).toBe('chrome://newtab/');
+  });
+});
+
+describe('TargetRegistry.isClosing', () => {
+  it('is true from an accepted Target.closeTarget until Target.targetDestroyed, and never for a plain detach', async () => {
+    const { registry, world, socket } = await startFakeRegistry();
+    world.targetInfos.push({
+      targetId: 'T1',
+      type: 'page',
+      title: 'a',
+      url: 'https://example.com',
+      attached: false,
+    });
+    await registry.resync();
+    const target = registry.all()[0]!;
+    await registry.attach(target.id);
+    await registry.detach(target.id);
+    expect(registry.isClosing(target.id)).toBe(false);
+
+    await registry.close(target.id);
+    expect(registry.tabs()).toHaveLength(1);
+    expect(registry.isClosing(target.id)).toBe(true);
+
+    socket.emitEvent('Target.targetDestroyed', { targetId: 'T1' });
+    expect(registry.tabs()).toHaveLength(0);
+    expect(registry.isClosing(target.id)).toBe(false);
+  });
+});

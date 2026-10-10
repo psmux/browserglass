@@ -1280,7 +1280,16 @@ export class Session {
       // duplicating its own error handling here.
       return this.registry.create(opts);
     }
-    if (this.registry.tabs().length > 0) return this.registry.create(opts);
+    // A tab whose close Chrome has accepted does not count. The reply to
+    // `target.close` goes out as soon as Chrome accepts the close, but the
+    // registry only drops the tab when `Target.targetDestroyed` arrives. A
+    // client that closes every pane and opens a new one straight away (the
+    // close replies are what tell it every pane is gone) can get here in
+    // between, with Chrome already quitting and the registry still listing
+    // the closed tabs. Counting them skipped the wait below, and the
+    // `target.new` failed with "Failed to open a new tab".
+    const registry = this.registry;
+    if (registry.tabs().some((t) => !registry.isClosing(t.id))) return registry.create(opts);
 
     // No windows left, but the socket is still up. Chrome may be in the
     // middle of quitting after its last window closed: the WebSocket has

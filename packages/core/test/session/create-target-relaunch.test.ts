@@ -221,6 +221,63 @@ describe('Session.createTarget: transparent relaunch after the browser process e
     expect(createdCount()).toBe(1);
   });
 
+  it('tabs whose close was accepted but whose destroy event has not arrived yet do not stop a mid-quit target.new from relaunching', async () => {
+    // The order a CI runner hit: the client closes its last tabs, gets
+    // every close reply (Chrome accepted `Target.closeTarget`), and sends
+    // `target.new` at once. Chrome is already quitting and refuses it, and
+    // `Target.targetDestroyed` for the closed tabs has not arrived, so the
+    // registry still lists them.
+    const quitting = await startFakeRegistry(undefined, undefined, NO_RECONNECT_ATTEMPTS);
+    quitting.world.targetInfos = [
+      { targetId: 'cdp-last', type: 'page', title: '', url: 'about:blank', attached: false },
+    ];
+    await quitting.registry.resync();
+    const [last] = quitting.registry.tabs();
+    expect(last).toBeDefined();
+    const original = quitting.socket.autoRespond;
+    quitting.socket.autoRespond = (msg, socket) => {
+      if (msg.method === 'Target.closeTarget') {
+        socket.emitResult(msg.id, { success: true });
+        return;
+      }
+      if (msg.method === 'Target.createTarget') {
+        socket.emitError(msg.id, { code: -32000, message: 'Failed to open a new tab' });
+        setTimeout(() => socket.simulateClose(1006, 'browser quit'), 0);
+        return;
+      }
+      original?.(msg, socket);
+    };
+    await quitting.registry.close(last?.id as never);
+    expect(quitting.registry.tabs()).toHaveLength(1);
+    expect(quitting.registry.isClosing(last?.id as never)).toBe(true);
+
+    const relaunched = await startFakeRegistry();
+    relaunched.world.targetInfos = [];
+    const { createdCount } = scriptTargetCreation(relaunched);
+
+    let executorCalls = 0;
+    const session = new Session({
+      id: 'sess_closing' as never,
+      instanceId: quitting.instanceId,
+      tenantId: 't',
+      nodeId: 'n',
+      bridge: quitting.bridge,
+      registry: quitting.registry,
+      clock: createManualClock(),
+      onEffect: () => {},
+      restartInstanceExecutor: async () => {
+        executorCalls += 1;
+        return { ok: true, bridge: relaunched.bridge, registry: relaunched.registry };
+      },
+    });
+    session.provision();
+
+    const target = await session.createTarget({});
+    expect(target.type).toBe('page');
+    expect(executorCalls).toBe(1);
+    expect(createdCount()).toBe(1);
+  });
+
   it('a target.new that fails on a browser with no windows whose socket stays open is reported as the real failure, with no relaunch', async () => {
     const live = await startFakeRegistry();
     expect(live.registry.tabs()).toEqual([]);

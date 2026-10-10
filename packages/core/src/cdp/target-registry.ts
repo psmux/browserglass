@@ -163,6 +163,14 @@ export interface TargetRegistry {
 
   create(opts: { url?: string; background?: boolean; newWindow?: boolean }): Promise<TargetRuntime>;
   close(id: TargetId): Promise<void>;
+  /**
+   * True while `id` is being closed by {@link close}: Chrome has accepted
+   * `Target.closeTarget` but its `Target.targetDestroyed` has not arrived,
+   * so the target is still listed by {@link tabs}. The wire reply to
+   * `target.close` goes out as soon as Chrome accepts the close, so a
+   * client can already consider such a tab gone.
+   */
+  isClosing(id: TargetId): boolean;
   activate(id: TargetId): Promise<void>;
   reorder(id: TargetId, beforeId: TargetId | null): void;
 
@@ -222,7 +230,6 @@ export interface StealthProfileHooks {
   onTargetAttached: (ctx: StealthTargetContext) => Promise<void>;
 }
 
-const __T=(...a: unknown[])=>{ if (process.env['BGLS_TRACE_NAV']) console.error('[TRACE]', Date.now()%100000, ...a); };
 /** The concrete `TargetRegistry` implementation. */
 export class TargetRegistryImpl implements TargetRegistry {
   readonly instanceId: InstanceId;
@@ -247,6 +254,8 @@ export class TargetRegistryImpl implements TargetRegistry {
    * instead, so an intentional teardown is never mistaken for a failure.
    */
   private readonly intentionalTeardown = new Set<string>();
+  /** CDP target ids whose `Target.closeTarget` Chrome has accepted and whose destroy event has not arrived yet. See {@link isClosing}. */
+  private readonly closing = new Set<string>();
   private readonly pendingWindowOpens = new Map<string, { url: string; at: number }>();
   private readonly infoChangedDebounce = new Map<string, TimerHandle>();
   /** Pending title catch-up resyncs, keyed by their own delay so each one is scheduled at most once at a time. See `scheduleInfoCatchUp`. */
@@ -580,6 +589,18 @@ export class TargetRegistryImpl implements TargetRegistry {
       this.intentionalTeardown.delete(target.cdpTargetId);
       throw err;
     }
+    // Self expiring like `intentionalTeardown`, so a destroy event that
+    // never arrives cannot hide a live tab for good.
+    const cdpTargetId = target.cdpTargetId;
+    this.closing.add(cdpTargetId);
+    scheduleTimer(() => {
+      this.closing.delete(cdpTargetId);
+    }, RECENTLY_DESTROYED_TTL_MS);
+  }
+
+  isClosing(id: TargetId): boolean {
+    const target = this.get(id);
+    return target !== undefined && this.closing.has(target.cdpTargetId);
   }
 
   async activate(id: TargetId): Promise<void> {
@@ -722,7 +743,6 @@ export class TargetRegistryImpl implements TargetRegistry {
   // ── raw event handlers ───────────────────────────────────────────────
 
   private handleTargetInfoChanged(raw: RawTargetInfo): void {
-    __T('infoChanged', raw.targetId.slice(0,6), raw.url);
     const existingTimer = this.infoChangedDebounce.get(raw.targetId);
     if (existingTimer) {
       clearTimer(existingTimer);
@@ -802,7 +822,6 @@ export class TargetRegistryImpl implements TargetRegistry {
    */
   private wirePageDomain(target: TargetRuntime, sessionId: string): void {
     if (target.type !== 'page' || this.disposed) return;
-    __T('wirePageDomain', target.cdpTargetId.slice(0,6), sessionId.slice(0,6), this.pageDomainUnsubs.get(target.cdpTargetId)?.sessionId?.slice(0,6));
 
     // A page session comes into existence through two paths that can both
     // fire for the same target: `attach()` builds one on demand, and
@@ -829,7 +848,6 @@ export class TargetRegistryImpl implements TargetRegistry {
       this.bridge.on(
         'Page.frameStartedLoading',
         (params) => {
-          __T('frameStartedLoading', target.cdpTargetId.slice(0,6), isMainFrame(params['frameId']));
           if (isMainFrame(params['frameId'])) setLoading(true);
         },
         sessionId as never,
@@ -850,7 +868,6 @@ export class TargetRegistryImpl implements TargetRegistry {
           // A cross process navigation can mint a new main frame id, so the
           // top level frame is identified by having no parent rather than by
           // matching what the frame tree said at attach time.
-          __T('frameNavigated', target.cdpTargetId.slice(0,6), frame?.parentId);
           if (frame?.parentId !== undefined) return;
           if (frame?.id) target.mainFrameId = frame.id;
           void this.refreshNavigationHistory(target, sessionId);
@@ -908,17 +925,36 @@ export class TargetRegistryImpl implements TargetRegistry {
         sessionId as never,
       )) as {
         currentIndex: number;
-        entries: readonly unknown[];
+        entries: readonly { url?: unknown }[];
       };
-      __T('history', target.cdpTargetId.slice(0,6), history.currentIndex, history.entries.length);
       const canGoBack = history.currentIndex > 0;
       const canGoForward = history.currentIndex < history.entries.length - 1;
-      if (target.canGoBack === canGoBack && target.canGoForward === canGoForward) return;
+      // The URL comes along from the same reading. Otherwise it arrives
+      // separately, through `Target.targetInfoChanged`, which is debounced
+      // (`TARGET_INFO_CHANGED_DEBOUNCE_MS`), and for that long a tab strip
+      // would read the new back and forward state next to the old URL:
+      // forward available, still showing the page it just went back from.
+      // Web and file URLs only: for Chrome's own pages the history entry
+      // and the target info can spell the same page differently
+      // (`chrome://newtab/` against `chrome://new-tab-page/`), and taking
+      // both would flip the URL back and forth.
+      const currentUrl = history.entries[history.currentIndex]?.url;
+      const url =
+        typeof currentUrl === 'string' && /^(https?|file):/.test(currentUrl)
+          ? currentUrl
+          : target.url;
+      if (
+        target.canGoBack === canGoBack &&
+        target.canGoForward === canGoForward &&
+        target.url === url
+      ) {
+        return;
+      }
       target.canGoBack = canGoBack;
       target.canGoForward = canGoForward;
+      target.url = url;
       this.emit('updated', target);
-    } catch (e) {
-      __T('history failed', target.cdpTargetId.slice(0,6), String(e));
+    } catch {
       // Best effort: a history read racing a closing target must not become
       // an unhandled rejection or a fabricated answer.
     }
@@ -927,7 +963,6 @@ export class TargetRegistryImpl implements TargetRegistry {
   /** Drops the `Page` subscriptions for one target and resets what they maintained, so a detached tab never reports stale navigation state. */
   private teardownPageDomain(cdpTargetId: string): void {
     const entry = this.pageDomainUnsubs.get(cdpTargetId);
-    __T('teardownPageDomain', cdpTargetId.slice(0,6), !!entry, new Error().stack?.split(String.fromCharCode(10)).slice(2,5).join('|'));
     if (!entry) return;
     for (const off of entry.unsubs) off();
     this.pageDomainUnsubs.delete(cdpTargetId);
@@ -1362,6 +1397,7 @@ export class TargetRegistryImpl implements TargetRegistry {
   }
 
   private removeTarget(cdpTargetId: string): void {
+    this.closing.delete(cdpTargetId);
     const target = this.byCdpId.get(cdpTargetId);
     if (!target) {
       return;
