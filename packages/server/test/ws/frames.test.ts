@@ -59,9 +59,9 @@ describe('frame emission', () => {
     const streamId = subscribed['streamId'] as number;
     const gen = subscribed['gen'] as number;
 
-    // `subscribe()` already forces one frame (a static page emits nothing
-    // on its own); this is that forced frame arriving as a real binary
-    // WS message, not a mocked call.
+    // The gateway forces one frame right after the reply (a static page
+    // emits nothing on its own); this is that forced frame arriving as a
+    // real binary WS message, not a mocked call.
     const frame = await nextBinary(ws);
     expect(frame.byteLength).toBeGreaterThan(HEADER_BYTES);
     const decoded = decodeBinaryHeader(frame);
@@ -71,5 +71,108 @@ describe('frame emission', () => {
     expect(decoded.payload.byteLength).toBeGreaterThan(0);
 
     ws.close();
+  });
+
+  /**
+   * Records every message `ws` receives, text and binary, in arrival order.
+   * The shared queue helpers keep text and binary apart, which hides
+   * exactly the ordering these tests care about.
+   */
+  function recordOrder(
+    ws: import('ws').WebSocket,
+  ): Array<{ kind: 'text'; t: string } | { kind: 'binary'; streamId: number; seq: number }> {
+    const log: Array<
+      { kind: 'text'; t: string } | { kind: 'binary'; streamId: number; seq: number }
+    > = [];
+    ws.on('message', (data: Buffer, isBinary: boolean) => {
+      if (isBinary) {
+        const h = decodeBinaryHeader(new Uint8Array(data).buffer);
+        log.push({ kind: 'binary', streamId: h.streamId, seq: h.seq });
+      } else {
+        log.push({ kind: 'text', t: String(JSON.parse(data.toString('utf8'))['t']) });
+      }
+    });
+    return log;
+  }
+
+  async function waitFor(cond: () => boolean, timeoutMs = 2000): Promise<void> {
+    const start = Date.now();
+    while (!cond()) {
+      if (Date.now() - start > timeoutMs) throw new Error('timed out waiting for condition');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+  }
+
+  async function joinAndSubscribe(viewerId: string): Promise<{
+    ws: import('ws').WebSocket;
+    log: ReturnType<typeof recordOrder>;
+    streamId: number;
+    targetId: string;
+  }> {
+    const token = await gw.issueToken({ viewerId });
+    const ws = gw.connect();
+    await waitOpen(ws);
+    const log = recordOrder(ws);
+    ws.send(JSON.stringify(hello({ auth: { scheme: 'bearer', token } })));
+    const welcome = await nextMessage(ws);
+    const targetId = (welcome['targets'] as Array<{ targetId: string }>)[0]!.targetId;
+    ws.send(JSON.stringify({ v: 1, t: 'stream.subscribe', ts: Date.now(), targetId }));
+    const subscribed = await nextMessageSkipping(ws, ['presence.state', 'target.updated']);
+    expect(subscribed['t']).toBe('stream.subscribed');
+    return { ws, log, streamId: subscribed['streamId'] as number, targetId };
+  }
+
+  it('the first frame of a page that never repaints arrives after stream.subscribed, never before it', async () => {
+    // No screencast frame is ever emitted here: the fake page is static,
+    // the case where a pane used to sit black. The only frame the viewer
+    // can get is the one the gateway forces for it.
+    const { ws, log, streamId } = await joinAndSubscribe('viewer-a');
+    await waitFor(() => log.some((m) => m.kind === 'binary'));
+    const replyAt = log.findIndex((m) => m.kind === 'text' && m.t === 'stream.subscribed');
+    const firstFrameAt = log.findIndex((m) => m.kind === 'binary');
+    expect(replyAt).toBeGreaterThanOrEqual(0);
+    expect(firstFrameAt).toBeGreaterThan(replyAt);
+    const first = log[firstFrameAt] as { streamId: number; seq: number };
+    expect(first.streamId).toBe(streamId);
+    expect(first.seq).toBeGreaterThan(0);
+    ws.close();
+  });
+
+  it('every viewer of the same static target gets its own first frame, each after its own reply', async () => {
+    const a = await joinAndSubscribe('viewer-a');
+    await waitFor(() => a.log.some((m) => m.kind === 'binary'));
+    const b = await joinAndSubscribe('viewer-b');
+    await waitFor(() => b.log.some((m) => m.kind === 'binary'));
+    for (const v of [a, b]) {
+      const replyAt = v.log.findIndex((m) => m.kind === 'text' && m.t === 'stream.subscribed');
+      const firstFrameAt = v.log.findIndex((m) => m.kind === 'binary');
+      expect(firstFrameAt).toBeGreaterThan(replyAt);
+      expect((v.log[firstFrameAt] as { streamId: number }).streamId).toBe(v.streamId);
+    }
+    // Both viewers share one stream, so seq keeps counting across them.
+    const aSeqs = a.log.filter((m) => m.kind === 'binary').map((m) => (m as { seq: number }).seq);
+    const bFirst = b.log.find((m) => m.kind === 'binary') as { seq: number };
+    expect(bFirst.seq).toBeGreaterThan(aSeqs[0]!);
+    a.ws.close();
+    b.ws.close();
+  });
+
+  it('re-subscribing after an unsubscribe gets a fresh first frame without any page activity', async () => {
+    const a = await joinAndSubscribe('viewer-a');
+    await waitFor(() => a.log.some((m) => m.kind === 'binary'));
+    a.ws.send(
+      JSON.stringify({ v: 1, t: 'stream.unsubscribe', ts: Date.now(), streamId: a.streamId }),
+    );
+    const before = a.log.length;
+    a.ws.send(
+      JSON.stringify({ v: 1, t: 'stream.subscribe', ts: Date.now(), targetId: a.targetId }),
+    );
+    await waitFor(() => a.log.slice(before).some((m) => m.kind === 'binary'));
+    const tail = a.log.slice(before);
+    const replyAt = tail.findIndex((m) => m.kind === 'text' && m.t === 'stream.subscribed');
+    const frameAt = tail.findIndex((m) => m.kind === 'binary');
+    expect(replyAt).toBeGreaterThanOrEqual(0);
+    expect(frameAt).toBeGreaterThan(replyAt);
+    a.ws.close();
   });
 });

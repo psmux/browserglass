@@ -57,6 +57,11 @@ export class StreamHandleImpl {
   private _canvas: HTMLCanvasElement | null = null;
   private _lastBitmap: ImageBitmap | null = null;
   private _lastStreamStats: Omit<StreamStats, 'renderer'> | null = null;
+  /**
+   * The newest binary frame received for this stream, kept so a renderer
+   * attached later can paint it straight away. See {@link noteFrame}.
+   */
+  private _lastFrame: Parameters<CanvasRenderer['push']>[0] | null = null;
   private _closed = false;
 
   constructor(host: StreamHost, info: StreamInfo) {
@@ -185,6 +190,14 @@ export class StreamHandleImpl {
     });
     this._renderer = renderer;
     this._canvas = canvas;
+    // The server sends one forced frame right after `stream.subscribed`,
+    // and a static page sends nothing after that. An app that attaches its
+    // canvas a tick later (React does, from an effect) would otherwise
+    // start on a black canvas and stay there. Replaying the newest frame is
+    // safe: the renderer drops it if its `gen` is stale, and the ack it
+    // sends again is a no op on the server, which ignores any ack at or
+    // below the last one it saw.
+    if (this._lastFrame) renderer.push(this._lastFrame);
     return renderer;
   }
 
@@ -200,6 +213,11 @@ export class StreamHandleImpl {
   /** Pushes a decoded binary frame at this stream's renderer, if one is attached; a no-op otherwise (the frame is still acked upstream by {@link BrowserGlassClient}'s own gen16 fast path). */
   pushToRenderer(frame: Parameters<CanvasRenderer['push']>[0]): void {
     this._renderer?.push(frame);
+  }
+
+  /** @internal Records `frame` as this stream's newest, for {@link attach} to replay. Called for every frame received, renderer or not. */
+  noteFrame(frame: Parameters<CanvasRenderer['push']>[0]): void {
+    this._lastFrame = frame;
   }
 
   async pause(): Promise<void> {
@@ -285,6 +303,7 @@ export class StreamHandleImpl {
   close(reason: StreamEvents['closed']['reason']): void {
     if (this._closed) return;
     this._closed = true;
+    this._lastFrame = null;
     this.detach();
     this.emitter.emit('closed', { reason });
   }

@@ -855,6 +855,8 @@ export class ManagedSession {
 
   /** `streamId` (per viewer socket) -> `targetId`, for `unsubscribe`/`ack`/`stream.quality` lookups keyed only by the wire handle. */
   private readonly streamIndex = new Map<string, Map<number, string>>();
+  /** `targetId` -> the forced capture currently in flight for it. See {@link forceTargetFrame}. */
+  private readonly forcedFrameInflight = new Map<string, Promise<boolean>>();
   /** Purge timers for disconnected-but-not-yet-expired viewers; see {@link detachViewer}. */
   private readonly pendingPurge = new Map<string, ReturnType<typeof setTimeout>>();
   /**
@@ -1839,10 +1841,15 @@ export class ManagedSession {
     state.qualityProfiles.set(viewerId, qualityProfile);
     this.streamIndex.get(viewerId)?.set(streamId, targetId);
 
-    // A brand new subscriber to a static page would otherwise see nothing
-    // until the page next changes (screencast is change-driven): force one
-    // frame now: every new attachment gets one.
-    await handle?.forceFrame().catch(() => false);
+    // No frame is forced here. A brand new subscriber to a static page
+    // sees nothing until the page next paints (the screencast is change
+    // driven), so it does need one forced frame, but that frame has to
+    // reach the socket AFTER the `stream.subscribed` reply. Forcing it
+    // inline, as this method once did, raced the reply: when the frame
+    // needed no re-encode it went out first, the client had no handle for
+    // its `streamId` yet, acked it and threw it away, and the pane stayed
+    // black until the page happened to repaint. The caller sends the reply
+    // and then calls `sendFirstFrame()`.
 
     // Subscribing can change which tab is `active`: a target that is the
     // first one subscribed in its own OS window becomes that window's live
@@ -2241,9 +2248,46 @@ export class ManagedSession {
   async requestKeyframe(viewerId: string, streamId: number): Promise<boolean> {
     const targetId = this.targetIdForStream(viewerId, streamId);
     if (!targetId) return false;
+    return this.forceTargetFrame(targetId);
+  }
+
+  /**
+   * Captures one fresh frame of whatever target `streamId` is subscribed
+   * to and fans it out, so a viewer that just subscribed gets the current
+   * picture without waiting for the page to repaint.
+   *
+   * Call it only once the `stream.subscribed` (or `resumed`) reply is on
+   * the socket. The frame travels through the normal `handleFrame` path,
+   * so it takes the next `seq` of the current `gen`, is encoded at the
+   * attachment's own tier, and counts against its backlog like any other
+   * frame. Every attachment on the target receives it, which is harmless:
+   * a frame of an unchanged page is just a repeat.
+   */
+  async sendFirstFrame(viewerId: string, streamId: number): Promise<boolean> {
+    return this.requestKeyframe(viewerId, streamId);
+  }
+
+  /**
+   * One capture per target at a time. Nine viewers subscribing to the same
+   * target at once share a single `Page.captureScreenshot` rather than
+   * queueing nine of them. Sharing is safe for a viewer that joins while a
+   * capture is already in flight: its attachment is registered before its
+   * reply is sent, and fan-out reads the attachment set when the frame
+   * lands, not when the capture started.
+   */
+  private forceTargetFrame(targetId: string): Promise<boolean> {
+    const inflight = this.forcedFrameInflight.get(targetId);
+    if (inflight) return inflight;
     const handle = this.session.streamHandleFor(targetId);
-    if (!handle) return false;
-    return handle.forceFrame();
+    if (!handle) return Promise.resolve(false);
+    const p = handle
+      .forceFrame()
+      .catch(() => false)
+      .finally(() => {
+        this.forcedFrameInflight.delete(targetId);
+      });
+    this.forcedFrameInflight.set(targetId, p);
+    return p;
   }
 
   // ── diagnostics ──────────────────────────────────────────────────────

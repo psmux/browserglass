@@ -308,6 +308,8 @@ export class Session {
 
   private readonly viewers = new Map<string, Viewer>();
   private readonly perTarget = new Map<string, PerTargetState>();
+  /** Teardowns still in flight, by target. `subscribe()` awaits the entry for its target before building fresh per-target state. */
+  private readonly tearingDown = new Map<string, Promise<void>>();
   /** Not `readonly`: rebuilt against the fresh `bridge`/`registry` by `restartInstance()`'s `applyRebind` (its closures capture `this.bridge`/`this.registry` by field read, but `../cdp/errors.ts`'s attach-failure bookkeeping is per `TargetActivationPolicy` instance, so a rebuild, not a mutation in place, is the correct reset). */
   private activation: TargetActivationPolicy;
   /** Not `readonly`; see {@link activation}'s note. `InputDispatcher` is rebuilt, not just re-pointed, because its constructor captures `bridge` by value (`InputDispatcherOptions.bridge`), not through a `this.bridge` closure the way `buildInputTargetResolver()`'s `targets` option does. */
@@ -610,6 +612,13 @@ export class Session {
   /** Subscribes `viewerId` to `targetId`'s stream, ensuring capture is running (screencast if this is the first/active target on the Instance, poll otherwise). Returns the viewer's freshly allocated `streamId`. */
   async subscribe(viewerId: string, targetId: string): Promise<number> {
     const viewer = this.requireViewer(viewerId);
+    // The last viewer leaving starts an asynchronous teardown. A subscribe
+    // that lands while it is still running (unsubscribe then subscribe to
+    // the same target, which React's StrictMode remount and an embed
+    // switching back to a target both do) would otherwise reuse the
+    // half torn down state, and the teardown would then remove the capture
+    // source out from under the new viewer, leaving it with no frames.
+    await this.tearingDown.get(targetId);
     const per = this.ensureTargetState(targetId);
     const handle = await this.registry.attach(targetId as TargetId);
     await this.activation.ensureSubscribed(targetId as TargetId, handle.id);
@@ -699,7 +708,23 @@ export class Session {
     }
   }
 
-  private async teardownTarget(targetId: string): Promise<void> {
+  /**
+   * Tears `targetId` down, recording the in-flight teardown so a
+   * `subscribe()` for the same target waits for it to finish (see
+   * {@link tearingDown}). A second call while one is already running joins
+   * it rather than starting another.
+   */
+  private teardownTarget(targetId: string): Promise<void> {
+    const running = this.tearingDown.get(targetId);
+    if (running) return running;
+    const p = this.runTeardown(targetId).finally(() => {
+      if (this.tearingDown.get(targetId) === p) this.tearingDown.delete(targetId);
+    });
+    this.tearingDown.set(targetId, p);
+    return p;
+  }
+
+  private async runTeardown(targetId: string): Promise<void> {
     const per = this.perTarget.get(targetId);
     if (!per) return;
     this.suppressSignalsFor.add(targetId);

@@ -997,6 +997,12 @@ export class Connection implements ConnectionSink {
       targets: managed.listTargets(),
       resume: welcome.resume,
     });
+    // Every restored stream is announced with `keyframePending: true`, so
+    // send that keyframe now, after `resumed`, never before it: a frame
+    // for a stream the client has not been told about yet is discarded.
+    for (const s of restoredStreams) {
+      void managed.sendFirstFrame(this.viewerId, s.streamId);
+    }
     managed.broadcastPresence();
     return false;
   }
@@ -2801,6 +2807,13 @@ export class Connection implements ConnectionSink {
       // `active` flip, but never ahead of the correlated reply to the
       // request that caused it. See `ManagedSession.subscribe()`.
       this.managed.announceActiveFlags();
+      // Also strictly after the reply: the first picture. A page that is
+      // not repainting produces no screencast frame, so without this a new
+      // pane stays black until something on the page changes. Sent before
+      // the reply, the frame reaches a client that has no handle for its
+      // `streamId` yet and is discarded. Not awaited: the reply is out and
+      // nothing else in this handler depends on the capture.
+      void this.managed.sendFirstFrame(this.viewerId, fields.streamId);
     } catch (err) {
       this.replyTo(sourceMsg, {
         t: 'error',

@@ -1529,6 +1529,7 @@ export class BrowserGlassClient {
       ack();
       return;
     }
+    handle.noteFrame(header);
     this.keyframeBySeq.set(`${header.streamId}:${header.seq}`, header.keyframe);
     if (handle.renderer) {
       handle.pushToRenderer(header);
