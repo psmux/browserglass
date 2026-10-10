@@ -344,7 +344,10 @@ export class AutomationClient {
   /**
    * Closes the socket and, for a client from {@link launch}, ends the
    * browser (`DELETE /v1/instances/:id?force=true`, retried once or twice
-   * on `E_TERMINATE_FAILED`). Idempotent: a second call waits on the
+   * on `E_TERMINATE_FAILED`). A launch with `profileKey` or `subject` may
+   * be sharing its browser with other clients, so it releases without
+   * `force`: the browser ends when the last client releases it, and an
+   * earlier release only detaches. Idempotent: a second call waits on the
    * first. If ending the browser fails, the error is thrown and the next
    * call tries again. For a client from {@link connect} this is the same
    * as {@link close}, since this client did not start the browser.

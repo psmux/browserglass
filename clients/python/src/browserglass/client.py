@@ -584,7 +584,11 @@ class AutomationClient:
     async def release(self) -> None:
         """Closes the socket and, for a client from :meth:`launch`, ends the
         browser (``DELETE /v1/instances/:id?force=true``, retried on
-        ``E_TERMINATE_FAILED``). Idempotent: a second call waits on the
+        ``E_TERMINATE_FAILED``). A launch with ``profile_key`` or
+        ``subject`` may be sharing its browser with other clients, so it
+        releases without ``force``: the browser ends when the last client
+        releases it, and an earlier release only detaches. Idempotent: a
+        second call waits on the
         first. If ending the browser fails, the error is raised and the
         next call tries again. For a client from :meth:`connect` this is
         the same as :meth:`close`, since this client did not start the
