@@ -342,6 +342,12 @@ export class ScriptedGateway {
   readonly cancelledUploads: string[] = [];
   /** When set, `files.set` answers with this error code instead of succeeding. */
   filesSetError: string | null = null;
+  /** How many upcoming `target.capture` requests are refused with `bgls.error.limit.rate` before one succeeds. */
+  captureRateLimitedReplies = 0;
+  /** The `retryAfterMs` those refusals carry; `undefined` omits the field. */
+  captureRetryAfterMs: number | undefined = 200;
+  /** Every `target.capture` this gateway received, refused or not. */
+  readonly captureCalls: Array<Record<string, unknown>> = [];
   private binaryCounter = 0;
 
   /** The bytes actually received for `uploadId`, concatenated in arrival order. */
@@ -476,6 +482,21 @@ export class ScriptedGateway {
         break;
       }
       case 'target.capture': {
+        this.captureCalls.push(msg);
+        if (id && this.captureRateLimitedReplies > 0) {
+          this.captureRateLimitedReplies -= 1;
+          this.reply(id, 'error', {
+            code: 'bgls.error.limit.rate',
+            category: 'limit',
+            message: 'Rate limit exceeded for target.capture.',
+            fatal: false,
+            retryable: true,
+            ...(this.captureRetryAfterMs !== undefined
+              ? { retryAfterMs: this.captureRetryAfterMs }
+              : {}),
+          });
+          break;
+        }
         if (id)
           this.reply(id, 'target.captured', {
             captureId: `cap_${id}`,

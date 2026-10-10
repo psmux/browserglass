@@ -99,6 +99,29 @@ async def _sleep_ms(ms: float) -> None:
     await asyncio.sleep(max(0.0, ms) / 1000)
 
 
+_RATE_LIMIT_RETRY_MAX_WAIT_MS = 5000
+
+
+async def _retry_once_on_rate_limit(send: Callable[[], Awaitable[Any]]) -> Any:
+    """Runs ``send`` and, if the gateway refuses it with
+    ``bgls.error.limit.rate``, waits the reply's ``retryAfterMs`` (1000ms
+    when absent) and sends it once more. Used by :meth:`AutomationClient.screenshot`,
+    whose ``capture`` bucket is the one a normal automation loop can brush
+    against. A wait over five seconds, or a second refusal, raises the
+    original ``POLICY_DENIED``."""
+    try:
+        return await send()
+    except AutomationError as err:
+        if err.details.get("wire_code") != "bgls.error.limit.rate":
+            raise
+        hinted = err.details.get("retry_after_ms")
+        wait_ms = hinted if isinstance(hinted, (int, float)) and hinted >= 0 else 1000
+        if wait_ms > _RATE_LIMIT_RETRY_MAX_WAIT_MS:
+            raise
+        await _sleep_ms(wait_ms)
+        return await send()
+
+
 def build_wait_for_text_predicate(selector: str, text: str, exact: bool) -> str:
     """The page-side predicate :meth:`AutomationClient.wait_for_text` hands
     to :meth:`AutomationClient.wait_for_function`. ``selector`` and
@@ -1002,7 +1025,7 @@ class AutomationClient:
                 payload["fullPage"] = full_page
             if max_dimension is not None:
                 payload["maxDimension"] = max_dimension
-            reply = await self._core.request("target.capture", payload)
+            reply = await _retry_once_on_rate_limit(lambda: self._core.request("target.capture", payload))
             if reply.get("data") is None:
                 raise AutomationError.not_implemented("screenshot (url delivery)", "a download-fetch path for large captures, not built in this pass")
             self._core.remember_gen(target_id, reply["gen"])

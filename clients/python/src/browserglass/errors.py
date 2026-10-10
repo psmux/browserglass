@@ -154,6 +154,8 @@ class AutomationError(Exception):
         details: dict[str, Any] = {"wire_code": wire_code, "category": msg.get("category")}
         if "context" in msg and msg["context"] is not None:
             details["context"] = msg["context"]
+        if isinstance(msg.get("retryAfterMs"), (int, float)):
+            details["retry_after_ms"] = msg["retryAfterMs"]
         return AutomationError(code, str(msg.get("message", wire_code)), details)
 
     @staticmethod

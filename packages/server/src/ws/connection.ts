@@ -1276,7 +1276,8 @@ export class Connection implements ConnectionSink {
           : typeof msg['targetId'] === 'string'
             ? (msg['targetId'] as string)
             : undefined;
-      if (!this.ensureRateLimiters().take(bucket, nowMono, scope)) {
+      const limiters = this.ensureRateLimiters();
+      if (!limiters.take(bucket, nowMono, scope)) {
         this.replyTo(msg, {
           t: 'error',
           code: 'bgls.error.limit.rate',
@@ -1284,7 +1285,9 @@ export class Connection implements ConnectionSink {
           message: `Rate limit exceeded for ${t}.`,
           fatal: false,
           retryable: true,
-          retryAfterMs: 1000,
+          // The real wait until this bucket holds a token again, so a
+          // client that sleeps exactly this long and retries succeeds.
+          retryAfterMs: limiters.retryAfterMs(bucket, nowMono, scope),
         });
         return;
       }

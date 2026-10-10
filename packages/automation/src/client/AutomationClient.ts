@@ -148,6 +148,34 @@ function sleepMs(ms: number): Promise<void> {
   });
 }
 
+/** Longest wait {@link retryOnceOnRateLimit} will honour before giving up and surfacing the refusal. */
+const RATE_LIMIT_RETRY_MAX_WAIT_MS = 5_000;
+
+/**
+ * Runs `send` and, if the gateway refuses it with `bgls.error.limit.rate`,
+ * waits the reply's `retryAfterMs` (1000ms when absent) and sends it once
+ * more. Used by `screenshot()` and `pdf()` only: the `capture` bucket is
+ * the one a normal automation loop can brush against (a screenshot after
+ * every step), and a single bounded retry turns that into a short pause
+ * instead of a failed run. A wait longer than
+ * {@link RATE_LIMIT_RETRY_MAX_WAIT_MS}, or a second refusal, throws the
+ * original `POLICY_DENIED` so a caller genuinely over the limit still
+ * finds out.
+ */
+async function retryOnceOnRateLimit<T>(send: () => Promise<T>): Promise<T> {
+  try {
+    return await send();
+  } catch (err) {
+    if (!(err instanceof AutomationError) || err.details?.['wireCode'] !== 'bgls.error.limit.rate')
+      throw err;
+    const hinted = err.details['retryAfterMs'];
+    const waitMs = typeof hinted === 'number' && hinted >= 0 ? hinted : 1000;
+    if (waitMs > RATE_LIMIT_RETRY_MAX_WAIT_MS) throw err;
+    await sleepMs(waitMs);
+    return send();
+  }
+}
+
 /**
  * Per-connection record of which targets currently have the `network`
  * diagnostics feed on, read only by {@link AutomationClient.waitForNetworkIdle}
@@ -979,14 +1007,16 @@ export class AutomationClient {
       opts as Record<string, unknown> | undefined,
       false,
       async () => {
-        const reply = await this.core.request<TargetCaptured>('target.capture', {
-          targetId,
-          delivery: 'inline',
-          ...(opts?.format !== undefined ? { format: opts.format } : {}),
-          ...(opts?.quality !== undefined ? { quality: opts.quality } : {}),
-          ...(opts?.fullPage !== undefined ? { fullPage: opts.fullPage } : {}),
-          ...(opts?.maxDimension !== undefined ? { maxDimension: opts.maxDimension } : {}),
-        });
+        const reply = await retryOnceOnRateLimit(() =>
+          this.core.request<TargetCaptured>('target.capture', {
+            targetId,
+            delivery: 'inline',
+            ...(opts?.format !== undefined ? { format: opts.format } : {}),
+            ...(opts?.quality !== undefined ? { quality: opts.quality } : {}),
+            ...(opts?.fullPage !== undefined ? { fullPage: opts.fullPage } : {}),
+            ...(opts?.maxDimension !== undefined ? { maxDimension: opts.maxDimension } : {}),
+          }),
+        );
         if (reply.data === undefined)
           throw AutomationError.notImplemented(
             'screenshot (url delivery)',
@@ -1032,35 +1062,41 @@ export class AutomationClient {
       opts as Record<string, unknown> | undefined,
       false,
       async () => {
-        const reply = await this.core.request<PagePdfGot>(
-          'page.pdf.get',
-          {
-            targetId,
-            ...(opts?.format !== undefined ? { format: opts.format } : {}),
-            ...(opts?.widthInches !== undefined ? { widthInches: opts.widthInches } : {}),
-            ...(opts?.heightInches !== undefined ? { heightInches: opts.heightInches } : {}),
-            ...(opts?.landscape !== undefined ? { landscape: opts.landscape } : {}),
-            ...(opts?.printBackground !== undefined
-              ? { printBackground: opts.printBackground }
-              : {}),
-            ...(opts?.scale !== undefined ? { scale: opts.scale } : {}),
-            ...(opts?.marginTopInches !== undefined
-              ? { marginTopInches: opts.marginTopInches }
-              : {}),
-            ...(opts?.marginBottomInches !== undefined
-              ? { marginBottomInches: opts.marginBottomInches }
-              : {}),
-            ...(opts?.marginLeftInches !== undefined
-              ? { marginLeftInches: opts.marginLeftInches }
-              : {}),
-            ...(opts?.marginRightInches !== undefined
-              ? { marginRightInches: opts.marginRightInches }
-              : {}),
-            ...(opts?.pageRanges !== undefined ? { pageRanges: opts.pageRanges } : {}),
-            ...(opts?.headerTemplate !== undefined ? { headerTemplate: opts.headerTemplate } : {}),
-            ...(opts?.footerTemplate !== undefined ? { footerTemplate: opts.footerTemplate } : {}),
-          },
-          opts?.timeoutMs ?? 45000,
+        const reply = await retryOnceOnRateLimit(() =>
+          this.core.request<PagePdfGot>(
+            'page.pdf.get',
+            {
+              targetId,
+              ...(opts?.format !== undefined ? { format: opts.format } : {}),
+              ...(opts?.widthInches !== undefined ? { widthInches: opts.widthInches } : {}),
+              ...(opts?.heightInches !== undefined ? { heightInches: opts.heightInches } : {}),
+              ...(opts?.landscape !== undefined ? { landscape: opts.landscape } : {}),
+              ...(opts?.printBackground !== undefined
+                ? { printBackground: opts.printBackground }
+                : {}),
+              ...(opts?.scale !== undefined ? { scale: opts.scale } : {}),
+              ...(opts?.marginTopInches !== undefined
+                ? { marginTopInches: opts.marginTopInches }
+                : {}),
+              ...(opts?.marginBottomInches !== undefined
+                ? { marginBottomInches: opts.marginBottomInches }
+                : {}),
+              ...(opts?.marginLeftInches !== undefined
+                ? { marginLeftInches: opts.marginLeftInches }
+                : {}),
+              ...(opts?.marginRightInches !== undefined
+                ? { marginRightInches: opts.marginRightInches }
+                : {}),
+              ...(opts?.pageRanges !== undefined ? { pageRanges: opts.pageRanges } : {}),
+              ...(opts?.headerTemplate !== undefined
+                ? { headerTemplate: opts.headerTemplate }
+                : {}),
+              ...(opts?.footerTemplate !== undefined
+                ? { footerTemplate: opts.footerTemplate }
+                : {}),
+            },
+            opts?.timeoutMs ?? 45000,
+          ),
         );
         this.core.rememberGen(targetId, reply.gen);
         return {

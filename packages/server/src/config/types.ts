@@ -214,6 +214,18 @@ export interface LimitsConfig {
   readonly clipboardMaxBytes?: number;
   readonly maxRequestBodyBytes?: number;
   readonly inputRatePerSec?: number;
+  /**
+   * Screenshots (`target.capture`), PDFs (`page.pdf.get`) and
+   * `recording.start` allowed per second, per connection per target.
+   * Default 5. Env `BGLS_CAPTURE_RATE_PER_SEC`.
+   */
+  readonly captureRatePerSec?: number;
+  /**
+   * How many of those may arrive back to back before the steady rate
+   * applies. Default 10, or twice `captureRatePerSec` when only the rate is
+   * set. Env `BGLS_CAPTURE_BURST`.
+   */
+  readonly captureBurst?: number;
 }
 
 /**

@@ -1,3 +1,4 @@
+import { DEFAULT_LIMITS } from '@browserglass/protocol';
 /**
  * `ViewerRateLimiters`'s `input`/`control` buckets, keyed per `(viewer,
  * targetId)` rather than once per connection. The wire limits are
@@ -10,7 +11,7 @@
  * `promoteOnInput` fixes.
  */
 import { describe, expect, it } from 'vitest';
-import { ViewerRateLimiters } from '../../src/wire/rate-limit.js';
+import { TokenBucket, ViewerRateLimiters } from '../../src/wire/rate-limit.js';
 
 const LIMITS = {
   inputRatePerSec: 10,
@@ -18,7 +19,7 @@ const LIMITS = {
   navRatePerSec: { perSecond: 4, burst: 8 },
   cursorRate: { perSecond: 20, burst: 40 },
   probeFullRate: { perSecond: 2, burst: 4 },
-  captureRatePerSec: 1,
+  captureRate: { perSecond: 5, burst: 10 },
   ackRate: { perSecond: 200, burst: 400 },
 };
 
@@ -57,13 +58,13 @@ describe('ViewerRateLimiters: input/control scoped per target', () => {
     expect(limiters.take('nav', 0, 'tgt_b')).toBe(true);
   });
 
-  it('connection-wide buckets (cursor, capture) are unaffected: still one budget shared across every target', () => {
+  it('cursor stays connection wide: one budget shared across every target', () => {
     const limiters = new ViewerRateLimiters(LIMITS, 0);
-    for (let i = 0; i < LIMITS.captureRatePerSec; i++) {
-      expect(limiters.take('capture', 0, 'tgt_a')).toBe(true);
+    for (let i = 0; i < LIMITS.cursorRate.burst; i++) {
+      expect(limiters.take('cursor', 0, 'tgt_a')).toBe(true);
     }
-    expect(limiters.take('capture', 0, 'tgt_a')).toBe(false);
-    expect(limiters.take('capture', 0, 'tgt_b')).toBe(false);
+    expect(limiters.take('cursor', 0, 'tgt_a')).toBe(false);
+    expect(limiters.take('cursor', 0, 'tgt_b')).toBe(false);
   });
 
   it('an input message with no resolvable targetId still gets rate limited, in one shared bucket, rather than bypassing the check', () => {
@@ -383,5 +384,86 @@ describe('ViewerRateLimiters: evaluate and evaluateInternal are separate, per-ta
     }
     expect(single.take('evaluateInternal', 0, 'tgt_a')).toBe(false);
     expect(single.take('evaluateInternal', 0, 'tgt_b')).toBe(true);
+  });
+});
+
+/**
+ * The `capture` bucket (`target.capture`, `page.pdf.get`,
+ * `recording.start`). It was one connection wide bucket at 1/sec, so an
+ * automation script taking a screenshot after every step was refused the
+ * second one inside a second, and two tabs screenshotting in parallel
+ * shared that single token.
+ */
+describe('ViewerRateLimiters: capture scoped per target', () => {
+  it('the default allows ten screenshots back to back on one target, then refuses the eleventh', () => {
+    const limiters = new ViewerRateLimiters(
+      { ...LIMITS, captureRate: DEFAULT_LIMITS.captureRate },
+      0,
+    );
+    expect(DEFAULT_LIMITS.captureRate).toEqual({ perSecond: 5, burst: 10 });
+    for (let i = 0; i < 10; i++) {
+      expect(limiters.take('capture', 0, 'tgt_a')).toBe(true);
+    }
+    expect(limiters.take('capture', 0, 'tgt_a')).toBe(false);
+  });
+
+  it("exhausting target A's capture budget does not refuse target B's screenshots", () => {
+    const limiters = new ViewerRateLimiters(LIMITS, 0);
+    for (let i = 0; i < LIMITS.captureRate.burst; i++) {
+      expect(limiters.take('capture', 0, 'tgt_a')).toBe(true);
+    }
+    expect(limiters.take('capture', 0, 'tgt_a')).toBe(false);
+    for (let i = 0; i < LIMITS.captureRate.burst; i++) {
+      expect(limiters.take('capture', 0, 'tgt_b')).toBe(true);
+    }
+  });
+
+  it('sustained capture at the steady rate never runs dry, and above it does', () => {
+    const limiters = new ViewerRateLimiters(LIMITS, 0);
+    let refused = 0;
+    // Ten seconds at exactly 5/sec: one screenshot every 200ms.
+    for (let tick = 0; tick < 50; tick++) {
+      if (!limiters.take('capture', tick * 200, 'tgt_a')) refused += 1;
+    }
+    expect(refused).toBe(0);
+
+    const fast = new ViewerRateLimiters(LIMITS, 0);
+    refused = 0;
+    // Ten seconds at 10/sec: the burst covers the first two seconds or so,
+    // then roughly half are refused.
+    for (let tick = 0; tick < 100; tick++) {
+      if (!fast.take('capture', tick * 100, 'tgt_a')) refused += 1;
+    }
+    expect(refused).toBeGreaterThan(30);
+  });
+
+  it('a configured capture rate is honoured', () => {
+    const limiters = new ViewerRateLimiters(
+      { ...LIMITS, captureRate: { perSecond: 1, burst: 1 } },
+      0,
+    );
+    expect(limiters.take('capture', 0, 'tgt_a')).toBe(true);
+    expect(limiters.take('capture', 0, 'tgt_a')).toBe(false);
+  });
+
+  it('retryAfterMs is the real wait until the next token, and waiting that long succeeds', () => {
+    const limiters = new ViewerRateLimiters(LIMITS, 0);
+    for (let i = 0; i < LIMITS.captureRate.burst; i++) limiters.take('capture', 0, 'tgt_a');
+    expect(limiters.take('capture', 0, 'tgt_a')).toBe(false);
+    const wait = limiters.retryAfterMs('capture', 0, 'tgt_a');
+    // 5/sec refills one token every 200ms.
+    expect(wait).toBe(200);
+    expect(limiters.take('capture', wait - 1, 'tgt_a')).toBe(false);
+    expect(limiters.take('capture', wait, 'tgt_a')).toBe(true);
+  });
+});
+
+describe('TokenBucket.msUntil', () => {
+  it('is 0 while tokens remain and never below the refill interval once empty', () => {
+    const bucket = new TokenBucket({ perSecond: 2, burst: 1 }, 0);
+    expect(bucket.msUntil(0)).toBe(0);
+    expect(bucket.take(0)).toBe(true);
+    expect(bucket.msUntil(0)).toBe(500);
+    expect(bucket.msUntil(250)).toBe(250);
   });
 });
