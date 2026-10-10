@@ -15,6 +15,9 @@ re-derived when a later change makes it stale.
 So does `pnpm bgls instances create` with no flags,
 `BrowserSwarm.open({ size })` with no subject, and `bg_swarm_open` with no
 subject. Nothing in the acquire path adopts a running browser on its own.
+A persistent profile key is the one selector that does, and only because
+it names a browser rather than a person; see
+[Sharing a persistent profile](#sharing-a-persistent-profile).
 
 That default is deliberate rather than an oversight. Two unrelated runs of
 the same script, or two unrelated users of the same app, must not silently
@@ -127,6 +130,60 @@ A per-user app therefore derives the subject from the signed-in user
 (`workspace:acme`), and switching between the two is a change of value,
 not a change of mechanism.
 
+## Sharing a persistent profile
+
+A persistent profile key (`profile: { mode: 'persistent', key }` on REST,
+`profileKey` on `AutomationClient.launch`, `profile_key` in Python) names
+one user data directory. Chrome cannot open one directory twice, so
+while a browser holds that profile, a second acquire of the same key
+cannot launch a second Chrome on it. It gets the running one instead:
+same `instanceId`, `reused: true`, `reuseReason: 'profile-shared'`. Both
+callers can connect, and the control lease decides who drives, exactly as
+for any two viewers of one browser.
+
+The decision is `findReusable`'s step 1 (`packages/router/src/router/reuse.ts`)
+followed by `canShare`, so the same rules as above apply: same tenant,
+same app or an app with a write grant on the profile, the holder `ready`
+or `degraded` with at least `shareMinRemainingMs` left, no
+share significant spec conflict, and room under the viewer limit.
+`BrowserRouter.doAcquire` adds one more: a token whose scope is narrowed
+to other instances or another pool is not handed the holder.
+
+When the holder cannot be shared, there is nothing to launch instead, so
+the acquire answers `409 E_PROFILE_BUSY` and the message says why:
+
+| Reason (`details.reason`) | What the message says |
+| --- | --- |
+| `spec_conflict` | the fields that differ, for example `headless`; ask with matching settings or release the browser first |
+| `viewer_limit` | the holder is at its viewer limit |
+| `not_ready` | the holder is still starting; `retryAfterMs` is 1000 |
+| `expiring_soon` | the holder ends too soon to share; `retryAfterMs` is the time left |
+| `cross_app` | the holder belongs to another app with no write grant |
+| `out_of_scope` | the calling token's scope does not cover the holder |
+
+Two acquires of one key started at the same moment do not race into a
+refusal. The one that loses waits, up to `profileShareWaitMs` (router
+config, default 30000), for the winner's browser to finish launching,
+and then shares it. Only if the holder is still launching after that does
+it get the `not_ready` refusal.
+
+A holder that is gone does not count. A holder row in a terminal state,
+or one owned by a node this gateway cannot reach, is not shared and is
+not a reason to refuse either. The acquire launches a fresh browser, and
+the profile service takes the old lease over once it may (at once for a
+dead gateway's row on a standalone gateway, otherwise after the lease
+expires), behind its corruption probe and its live singleton check
+(`ProfileService.acquirePersistent`).
+
+```bash
+# Twice, from two shells. The second answers the same instanceId.
+curl -sS -X POST "$GATEWAY/v1/instances"   -H "authorization: Bearer $TOKEN" -H 'content-type: application/json'   -d '{ "profile": { "mode": "persistent", "key": "shared-demo" } }'   | jq '{instanceId, reused, reuseReason}'
+```
+
+`AutomationClient.launch({ profileKey })` and the Python `launch(profile_key=...)`
+release such a browser without `force`, so one script finishing does not
+end the browser under another script still using it.
+
 ## Releasing a shared browser
 
 Once a subject hands one instance to more than one viewer, a release is no
@@ -137,12 +194,12 @@ out, unless `force: true` is passed. `DELETE /v1/instances/:id` reports
 that result, accepts `?force=true`, and `pnpm bgls instances release` prints
 which of the three happened and takes `--force`.
 
-One caveat, true at the time of writing: `LiveViewerPort` is not wired up
-in `@browserglass/server` yet, so the router's viewer count reads a
-constant zero and every release through a stock gateway terminates. The
-`detached` outcome is part of the contract and is reported correctly; it
-just cannot occur yet. Do not build a deployment on the assumption that
-another viewer's presence will protect a browser from your release today.
+The viewer count comes from the gateway's live sockets
+(`LiveViewerPort`, wired in `packages/server/src/index.ts`), and it
+counts this process only. A caller that never opened a socket to the
+browser counts for nothing, so two REST callers that acquired and never
+connected see the first release terminate. A release from a socket that
+is closing is not counted against itself.
 
 ## By on-ramp
 
@@ -327,5 +384,5 @@ once, by design: the second is queued and told so. See
 3. For N browsers, use N subjects. Let `BrowserSwarm` derive them, or
    derive them the same way it does.
 4. Read `reused` and `reuseReason` if you need to know which you got.
-5. Do not release a browser you intend to have back, and do not assume
-   somebody else's viewer will stop your release today.
+5. Do not release a browser you intend to have back, and do not pass
+   `force` on a browser somebody else may still be using.

@@ -58,6 +58,12 @@ socket and ends the browser with `force=true`, retrying a couple of times
 on `E_TERMINATE_FAILED`, which Windows sometimes answers once. Calling it
 twice is fine.
 
+A second `launch()` with the same `profileKey` while the first browser is
+still running gets that same browser back, since Chrome cannot open one
+profile twice. So a launch with `profileKey` (or `subject`) releases
+without `force`: the browser ends on the last client's release, and an
+earlier release only detaches. See `docs/ownership.md`.
+
 `caps` defaults to `DEFAULT_LAUNCH_CAPS`, the `agent` role bundle:
 `evaluate`, `capture`, `devtools`, `intercept`, `download`, `cdp`,
 `instance.restart` and the rest of what it takes to operate one browser,

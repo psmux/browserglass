@@ -83,6 +83,12 @@ before the error reaches you. `release()` ends the browser with
 `force=true` and retries on `E_TERMINATE_FAILED`. Calling it twice is
 fine.
 
+A second `launch()` with the same `profile_key` while the first browser
+is still running gets that same browser back, since Chrome cannot open
+one profile twice. So a launch with `profile_key` (or `subject`) releases
+without `force`: the browser ends on the last client's release, and an
+earlier release only detaches. See `docs/ownership.md`.
+
 `caps` defaults to `DEFAULT_LAUNCH_CAPS`, the `agent` role bundle, so
 every method works, `evaluate()`, `screenshot()`, `diagnostics`, the
 request `gate` and `wait_for_download()` included. It leaves out `admin`.
