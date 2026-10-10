@@ -664,3 +664,39 @@ describe('Session stream cap (per window isolation)', () => {
     expect(session.streamHandleFor(b)).toBeDefined();
   });
 });
+
+describe('Session resubscribe during teardown', () => {
+  it('a subscribe that lands while the last viewer is still being torn down gets live state, not the dying one', async () => {
+    const { session, targetId } = await makeSession();
+    session.addViewer({
+      id: 'vwr_1',
+      tenantId: 't',
+      appId: 'a',
+      subject: 's',
+      capabilities: ['view'],
+      kind: 'human',
+      isAdmin: false,
+      connectedAtMs: 0,
+    });
+    const first = await session.subscribe('vwr_1', targetId);
+    const oldStream = session.streamHandleFor(targetId)!.stream;
+
+    // Unsubscribe then subscribe straight away, the way a React StrictMode
+    // remount does. The teardown the unsubscribe starts is still running
+    // when the second subscribe arrives.
+    session.unsubscribe('vwr_1', first, targetId);
+    await session.subscribe('vwr_1', targetId);
+
+    // Let anything still pending from the teardown finish.
+    await new Promise((r) => setTimeout(r, 20));
+
+    const handle = session.streamHandleFor(targetId);
+    expect(handle).toBeDefined();
+    expect(handle!.stream).not.toBe(oldStream);
+    expect(handle!.stream.stopped).toBe(false);
+    // The target still has a capture source. Before the fix the teardown
+    // removed it after the resubscribe had already reused the old state,
+    // so the new viewer was subscribed to a target nothing was capturing.
+    expect(session.activeTargetIds).toContain(targetId);
+  });
+});
