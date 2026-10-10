@@ -118,6 +118,25 @@ describe('launchInstance()', () => {
     expect(ids[0]).not.toBe(ids[1]);
   });
 
+  it('releases a shareable launch without force, so other clients on the same browser keep it', async () => {
+    // A second launch of the same profile key or subject gets the same
+    // running browser. Forcing the release would end it under the others.
+    for (const shareBy of [{ profileKey: 'acct' }, { subject: 'user:42' }]) {
+      const gw = happyGateway(0);
+      const a = await launchInstance({
+        gateway: GW,
+        adminToken: TOKEN,
+        ...shareBy,
+        fetch: gw.impl,
+      });
+      await a.release();
+      expect(gw.calls.at(-1)).toMatchObject({
+        method: 'DELETE',
+        url: `${GW}/v1/instances/inst_1`,
+      });
+    }
+  });
+
   it('passes headless: false through as off, and caller caps as given', async () => {
     const gw = happyGateway(0);
     await launchInstance({

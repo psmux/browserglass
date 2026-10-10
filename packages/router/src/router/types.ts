@@ -534,7 +534,13 @@ export interface DrainHandle {
  * side changing shape.
  */
 export interface ProfileServicePort {
-  /** Resolves a `ProfileSpec` request into a `ResolvedProfileSpec`, optionally creating a `creating` row. `dryRun` defaults to `true`. */
+  /**
+   * Resolves a `ProfileSpec` request into a `ResolvedProfileSpec`, optionally creating a `creating` row. `dryRun` defaults to `true`.
+   *
+   * Must not refuse a persistent profile only because a live instance of
+   * the same app holds its lease. Sharing that holder, or refusing it with
+   * a reason, is `findReusable`'s decision, which runs after this call.
+   */
   resolve(req: {
     tenantId: string;
     appId: string;

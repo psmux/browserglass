@@ -21,7 +21,8 @@ import type { ActionRecord, YieldPolicy } from './types.js';
  *     included), so we ask for a narrowed one instead. The attach route
  *     only ever narrows: a cap the admin token lacks is silently dropped,
  *     never added.
- *  4. On release, `DELETE /v1/instances/:id?force=true`, retried on
+ *  4. On release, `DELETE /v1/instances/:id?force=true` (without `force`
+ *     for a shareable launch, see `LaunchedInstance.release`), retried on
  *     `E_TERMINATE_FAILED` (Windows sometimes answers that once and then
  *     succeeds) and treated as done on a 404.
  *
@@ -92,7 +93,14 @@ export interface LaunchedInstance {
   readonly instanceId: string;
   readonly wsUrl: string;
   readonly ticket: string;
-  /** Ends the browser with `force=true`. Retries `E_TERMINATE_FAILED`; a 404 counts as done. */
+  /**
+   * Ends the browser. A throwaway launch (no `profileKey`, no `subject`)
+   * ends it with `force=true`. A launch that other callers can share, by
+   * profile key or by subject, releases without force, so the gateway
+   * ends the browser only when this was the last viewer on it and
+   * otherwise just detaches. Retries `E_TERMINATE_FAILED`; a 404 counts
+   * as done.
+   */
   release(): Promise<void>;
 }
 
@@ -253,7 +261,12 @@ export async function launchInstance(opts: LaunchOptions = {}): Promise<Launched
       : {}),
   });
   const instanceId = created.instanceId;
-  const release = () => releaseInstance(rest, instanceId);
+  // A second launch of the same profile key or subject gets the SAME
+  // running browser back. Forcing the release would end it under every
+  // other client still using it, so a shareable launch leaves the call to
+  // the gateway's viewer count instead.
+  const shareable = opts.profileKey !== undefined || opts.subject !== undefined;
+  const release = () => releaseInstance(rest, instanceId, !shareable);
 
   try {
     await waitForReady(rest, instanceId, created.state, opts);
@@ -308,8 +321,8 @@ async function waitForReady(
 const RELEASE_ATTEMPTS = 3;
 const RELEASE_RETRY_MS = 1000;
 
-async function releaseInstance(rest: Rest, instanceId: string): Promise<void> {
-  const path = `/v1/instances/${encodeURIComponent(instanceId)}?force=true`;
+async function releaseInstance(rest: Rest, instanceId: string, force: boolean): Promise<void> {
+  const path = `/v1/instances/${encodeURIComponent(instanceId)}${force ? '?force=true' : ''}`;
   for (let attempt = 1; ; attempt++) {
     try {
       await rest.call('DELETE', path);

@@ -8,7 +8,11 @@ import { BrowserRouter, type BrowserRouterOptions } from '../../src/router/Brows
 import type { RouterConfig } from '../../src/router/config.js';
 import { DEFAULT_ROUTER_CONFIG } from '../../src/router/config.js';
 import type { RouterLogger } from '../../src/router/logger.js';
-import type { AttachCredentialIssuer, LiveViewerPort } from '../../src/router/types.js';
+import type {
+  AttachCredentialIssuer,
+  LiveViewerPort,
+  ProfileServicePort,
+} from '../../src/router/types.js';
 import type { FakeClock } from './fakeClock.js';
 import { createFakeQuotaProvider, createRecordingAuditSink, noopMetricsSink } from './fakeMisc.js';
 import { type FakeNodeTransport, createFakeNodeTransport } from './fakeNodeTransport.js';
@@ -19,6 +23,7 @@ export interface TestRouter {
   router: BrowserRouter;
   store: ReturnType<typeof createMockStore>;
   nodes: FakeNodeTransport;
+  /** The fake unless `opts.profiles` supplied a real port, in which case it is that port. */
   profiles: FakeProfileService;
   audit: ReturnType<typeof createRecordingAuditSink>;
   nodeRegistry: NodeRegistry;
@@ -34,14 +39,18 @@ export function createTestRouter(
     logger?: RouterLogger;
     attachCredentials?: AttachCredentialIssuer;
     reachesPeerNodes?: boolean;
+    /** A real `ProfileServicePort` (the adapter over a real `ProfileService`) in place of the fake. */
+    profiles?: ProfileServicePort;
+    /** This router's own node id, for a real store whose foreign keys need it to name a registered node. */
+    nodeId?: string;
   },
 ): TestRouter {
   const store = (opts?.store as ReturnType<typeof createMockStore>) ?? createMockStore(clock);
   const nodes = createFakeNodeTransport();
-  const profiles = createFakeProfileService();
+  const profiles = (opts?.profiles as FakeProfileService | undefined) ?? createFakeProfileService();
   const audit = createRecordingAuditSink();
   const nodeRegistry = new NodeRegistry(clock, {
-    nodeId: newId('nod'),
+    nodeId: opts?.nodeId ?? newId('nod'),
     capacity: {
       maxInstances: 100,
       maxMemoryMb: 64_000,

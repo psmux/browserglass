@@ -12,6 +12,7 @@ import { type FakeProfileFs, createFakeProfileFs } from './support/fakeProfileFs
 import {
   type Basics,
   type StoreFixture,
+  createTestInstance,
   freshRouterStore,
   seedBasics,
 } from './support/testStore.js';
@@ -70,6 +71,38 @@ describe('ProfileServicePortAdapter', () => {
       resolved.resolved.profileId as string,
     );
     expect(row?.lease).toBeNull();
+  });
+
+  it('resolve names a profile held by a live instance of the same app instead of refusing it', async () => {
+    // Sharing that holder, or refusing it with a reason, is the router's
+    // `findReusable` decision, which runs AFTER resolve. Throwing here made
+    // every second acquire of a held persistent key fail E_PROFILE_BUSY.
+    await createTestInstance(fixture.store, basics, 'inst_holder');
+    const first = await adapter.resolve({
+      tenantId: basics.tenantId,
+      appId: basics.appId,
+      spec: { mode: 'persistent', key: 'user:held' },
+      dryRun: false,
+    });
+    await adapter.lease({
+      tenantId: basics.tenantId,
+      appId: basics.appId,
+      spec: first.resolved,
+      instanceId: 'inst_holder',
+      nodeId: basics.nodeId,
+      ttlMs: 30_000,
+    });
+
+    const again = await adapter.resolve({
+      tenantId: basics.tenantId,
+      appId: basics.appId,
+      spec: { mode: 'persistent', key: 'user:held' },
+      dryRun: false,
+    });
+
+    expect(again.created).toBe(false);
+    expect(again.resolved.key).toBe('user:held');
+    expect(again.resolved.profileId).toBe(first.resolved.profileId);
   });
 
   it('releaseLeaseQuietly reports a swallowed release failure instead of discarding it', async () => {

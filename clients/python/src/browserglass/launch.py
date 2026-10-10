@@ -13,8 +13,9 @@ Mirrors ``packages/automation/src/launch.ts``. The flow:
    ``bgls token`` token that is the whole ``owner`` bundle, ``admin``
    included), so we ask for a narrowed one. The attach route only narrows:
    a cap the admin token lacks is dropped, never added.
-4. On release, ``DELETE /v1/instances/:id?force=true``, retried on
-   ``E_TERMINATE_FAILED`` and treated as done on a 404.
+4. On release, ``DELETE /v1/instances/:id?force=true`` (without ``force``
+   for a shareable launch, see :attr:`LaunchedInstance.release`), retried
+   on ``E_TERMINATE_FAILED`` and treated as done on a 404.
 
 The admin token only ever travels as a header. It never appears in an
 error message or anything this module returns.
@@ -82,7 +83,11 @@ class LaunchedInstance:
     ws_url: str
     ticket: str
     release: Callable[[], Awaitable[None]]
-    """Ends the browser with ``force=true``. Retries ``E_TERMINATE_FAILED``; a 404 counts as done."""
+    """Ends the browser. A throwaway launch (no ``profile_key``, no ``subject``)
+    ends it with ``force=true``. A launch other callers can share, by profile
+    key or by subject, releases without force, so the gateway ends the
+    browser only when this was the last viewer on it and otherwise just
+    detaches. Retries ``E_TERMINATE_FAILED``; a 404 counts as done."""
 
 
 class _Rest:
@@ -210,10 +215,15 @@ async def launch_instance(
         await rest.aclose()
         raise
     instance_id = created["instanceId"]
+    # A second launch of the same profile key or subject gets the SAME
+    # running browser back. Forcing the release would end it under every
+    # other client still using it, so a shareable launch leaves the call to
+    # the gateway's viewer count instead.
+    force = profile_key is None and subject is None
 
     async def release() -> None:
         try:
-            await _release(rest, instance_id)
+            await _release(rest, instance_id, force)
         finally:
             await rest.aclose()
 
@@ -256,8 +266,8 @@ async def _wait_for_ready(rest: _Rest, instance_id: str, state: str, timeout_s: 
         state = (view.get("instance") or {}).get("state", "unknown")
 
 
-async def _release(rest: _Rest, instance_id: str) -> None:
-    path = f"/v1/instances/{instance_id}?force=true"
+async def _release(rest: _Rest, instance_id: str, force: bool = True) -> None:
+    path = f"/v1/instances/{instance_id}" + ("?force=true" if force else "")
     attempt = 0
     while True:
         attempt += 1

@@ -151,7 +151,16 @@ const TERMINAL_HOLDER_STATES: ReadonlySet<string> = new Set([
 /** `findReusable`'s outcome. */
 export type ReuseOutcome =
   | { kind: 'found'; instance: Instance; why: 'profile-shared' | 'sticky' | 'warm' }
-  | { kind: 'busy'; holderAppId: string }
+  | {
+      kind: 'busy';
+      /** The live instance holding the requested profile's lease, which this request may not share. */
+      holder: Instance;
+      holderAppId: string;
+      /** Why `canShare` refused it, so the caller's `E_PROFILE_BUSY` can say so. */
+      reason: ShareDenyReason;
+      /** The disagreeing fields, set when `reason` is `spec_conflict`. */
+      conflicts?: readonly string[];
+    }
   | {
       kind: 'none';
       /**
@@ -257,7 +266,13 @@ export async function findReusable(req: FindReusableRequest): Promise<ReuseOutco
           { ...req.shareCtx, now, liveViewerCount: req.liveViewerCountOf(holder.id) },
         );
         if (verdict.allowed) return { kind: 'found', instance: holder, why: 'profile-shared' };
-        return { kind: 'busy', holderAppId: holder.appId };
+        return {
+          kind: 'busy',
+          holder,
+          holderAppId: holder.appId,
+          reason: verdict.reason,
+          ...(verdict.conflicts !== undefined ? { conflicts: verdict.conflicts } : {}),
+        };
       }
     }
   }

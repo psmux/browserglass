@@ -85,6 +85,18 @@ async def test_launch_polls_until_ready_and_narrows_caps():
         assert len(ids) == 2 and ids[0] != ids[1]
 
 
+@pytest.mark.parametrize("share_by", [{"profile_key": "acct"}, {"subject": "user:42"}])
+async def test_shareable_launch_releases_without_force(share_by):
+    # A second launch of the same profile key or subject gets the same
+    # running browser. Forcing the release would end it under the others.
+    gw = FakeGateway()
+    async with gw.client() as http:
+        a = await launch_instance(gateway=GW, admin_token=TOKEN, http_client=http, **share_by)
+        await a.release()
+    assert gw.calls[-1]["method"] == "DELETE"
+    assert gw.calls[-1]["url"] == f"{GW}/v1/instances/inst_1"
+
+
 async def test_headless_false_and_custom_caps():
     gw = FakeGateway()
     async with gw.client() as http:

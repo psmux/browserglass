@@ -52,15 +52,23 @@ export class ProfileServicePortAdapter implements ProfileServicePort {
       ...(req.dryRun !== undefined ? { dryRun: req.dryRun } : {}),
     });
     if (result.kind === 'lease') return { resolved: result.resolved, created: result.created };
-    if (result.kind === 'reuse') {
-      throw profileErr(
-        'E_PROFILE_BUSY',
-        `profile already leased by instance ${result.instanceId}; BrowserRouter's own reuse check should have handled this before calling resolve`,
-        { details: { instanceId: result.instanceId } },
-      );
-    }
-    throw profileErr(result.code, `profile resolve failed: ${result.code}`, {
+    // A profile whose lease is held by an instance this app may share is
+    // not an error at this step. The port's contract is that `resolve`
+    // names the profile and nothing more; `BrowserRouter.doAcquire` asks
+    // `findReusable` next, which hands the caller the live holder or
+    // refuses with the reason, and a dead holder's lease is `lease()`'s to
+    // take over.
+    //
+    // This used to throw `E_PROFILE_BUSY` here, on the assumption that the
+    // router's reuse check ran first. It runs after, so every second
+    // acquire of a held persistent key was refused before sharing was
+    // even considered, and the router's `profile-shared` reuse never
+    // happened outside tests whose fake port did not throw.
+    if (result.kind === 'reuse') return { resolved: result.resolved, created: false };
+    const retryAfterMs = result.detail['retryAfterMs'];
+    throw profileErr(result.code, describeResolveError(result.code, result.detail), {
       details: result.detail,
+      ...(typeof retryAfterMs === 'number' ? { retryAfterMs } : {}),
     });
   }
 
@@ -278,4 +286,20 @@ function parseStoredKey(
   const [, tenantId, appId, rawKey] = match;
   if (!tenantId || !appId || rawKey === undefined) return null;
   return { tenantId, appId, rawKey };
+}
+
+/** A readable message for a `resolve` refusal, naming the holder or state where the detail has one. */
+function describeResolveError(code: string, detail: Record<string, unknown>): string {
+  if (code === 'E_PROFILE_BUSY') {
+    if (typeof detail['holderInstanceId'] === 'string') {
+      return detail['holderAppId'] != null
+        ? `profile is in use by instance ${detail['holderInstanceId']}, which belongs to another app that has not granted this app access to the profile`
+        : `profile is still leased by instance ${detail['holderInstanceId']}, which no longer exists; retry after the lease expires`;
+    }
+    if (typeof detail['retryAfterMs'] === 'number') {
+      return `profile is being created, snapshotted or migrated; retry in ${detail['retryAfterMs']}ms`;
+    }
+    return 'profile is leased by an unknown holder; retry after the lease expires';
+  }
+  return `profile resolve failed: ${code}`;
 }
