@@ -25,7 +25,11 @@ import { createFakeClock } from '../support/fakeClock.js';
 
 const KEY = 'shared-demo';
 
-function principalFor(tenantId: string, appId: string, scope: Scope = { kind: 'tenant' }): Principal {
+function principalFor(
+  tenantId: string,
+  appId: string,
+  scope: Scope = { kind: 'tenant' },
+): Principal {
   return {
     tenantId: tenantId as TenantId,
     appId: appId as AppId,
