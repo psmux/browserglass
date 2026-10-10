@@ -227,9 +227,16 @@ describe('target.close and target.activate get a real, correlated reply and take
         height: number;
       };
 
+      // The first frame is captured after the reply. Target B is a
+      // background tab, and Chrome sometimes holds a background tab's
+      // `Page.captureScreenshot` until the CDP command timeout (about
+      // 4.5 s). Until the first frame moved after the reply, that wait
+      // happened inside the subscribe and delayed the reply itself (this
+      // test then waited up to 10 s for the reply), so the budget here
+      // moves from the reply to the frame rather than shrinking.
       const gotFirstFrame = await waitUntil(
         () => (frameArrivals.get(s.streamId)?.length ?? 0) >= 1,
-        3000,
+        10_000,
       );
       expect(gotFirstFrame).toBe(true);
 
