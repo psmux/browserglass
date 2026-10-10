@@ -37,8 +37,15 @@ export interface Limits {
   cursorRate: RateLimit;
   /** `target.probe detail:'full'`. */
   probeFullRate: RateLimit;
-  /** `target.capture`, per viewer. */
-  captureRatePerSec: number;
+  /**
+   * `target.capture`, `page.pdf.get` and `recording.start`, one bucket per
+   * `(connection, target)`. A screenshot is one CDP `Page.captureScreenshot`
+   * round trip plus an encode, so it is capped, but loosely enough that a
+   * script taking a screenshot after every step does not trip it. Operators
+   * override it with `limits.captureRatePerSec`/`limits.captureBurst` or
+   * `BGLS_CAPTURE_RATE_PER_SEC`/`BGLS_CAPTURE_BURST`.
+   */
+  captureRate: RateLimit;
   ackRate: RateLimit;
   maxUploadBytes: number;
   /** `clipboard.write`; exempted from `maxControlMsgBytes` up to this ceiling. */
@@ -77,7 +84,7 @@ export const DEFAULT_LIMITS: Readonly<Limits> = Object.freeze({
   navRatePerSec: Object.freeze({ perSecond: 4, burst: 8 }),
   cursorRate: Object.freeze({ perSecond: 20, burst: 40 }),
   probeFullRate: Object.freeze({ perSecond: 2, burst: 4 }),
-  captureRatePerSec: 1,
+  captureRate: Object.freeze({ perSecond: 5, burst: 10 }),
   ackRate: Object.freeze({ perSecond: 200, burst: 400 }),
   maxUploadBytes: 268435456,
   maxClipboardBytes: 262144,

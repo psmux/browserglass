@@ -63,9 +63,22 @@ export class TokenBucket {
     this.refill(nowMono);
     return this.tokens;
   }
+
+  /**
+   * Milliseconds until `cost` tokens are available again, 0 when they
+   * already are. Feeds the `retryAfterMs` of a `bgls.error.limit.rate`
+   * reply, so a client that waits exactly this long succeeds.
+   */
+  msUntil(nowMono: number, cost = 1): number {
+    this.refill(nowMono);
+    const missing = Math.min(cost, this.capacity) - this.tokens;
+    if (missing <= 0) return 0;
+    if (this.refillPerMs <= 0) return Number.POSITIVE_INFINITY;
+    return Math.ceil(missing / this.refillPerMs);
+  }
 }
 
-/** A plain per-second bucket (`inputRatePerSec`, `captureRatePerSec`), expressed as a {@link RateLimit} with `burst` equal to the rate itself. */
+/** A plain per-second bucket (`inputRatePerSec`), expressed as a {@link RateLimit} with `burst` equal to the rate itself. */
 export function perSecondAsRateLimit(perSecond: number): RateLimit {
   return { perSecond, burst: Math.max(1, perSecond) };
 }
@@ -114,9 +127,19 @@ export type RateBucketName =
  * hard in two or three panes at once starves a fourth, which reproduces
  * the "several browsers can never be driven at once" symptom that window
  * isolation fixes, just from a different mechanism than the active-target
- * steal. `cursor`/`capture` stay connection-wide: their ceilings are
- * already generous relative to how often a viewer actually moves a shared
- * cursor or captures.
+ * steal. `cursor` stays connection-wide: its ceiling is already generous
+ * relative to how often a viewer actually moves a shared cursor.
+ *
+ * `capture` (`target.capture`, `page.pdf.get`, `recording.start`) is scoped
+ * per TARGET. It used to be one connection-wide bucket at 1/sec, which was
+ * sized for a person clicking "save screenshot" and nothing else. An
+ * automation script that screenshots after every step, a visual test, or a
+ * swarm of agents each owning a tab all share one connection and were
+ * refused the second screenshot inside a second, across every tab at once.
+ * Per target, each tab gets `captureRate` (5/sec, burst 10 by default) and
+ * the total stays bounded by `maxTargets`. The cost per call is one CDP
+ * round trip plus an encode, which Chrome serialises per renderer anyway,
+ * so a per target budget tracks the real resource being protected.
  *
  * `nav` is scoped per TARGET too. One person rarely navigates faster than
  * 4/sec, but one script driving several panes does: back, forward and
@@ -200,6 +223,7 @@ const PER_SCOPE_BUCKETS: ReadonlySet<RateBucketName> = new Set([
   'input',
   'control',
   'nav',
+  'capture',
   'ack',
   'probeFull',
   'evaluate',
@@ -340,7 +364,7 @@ export class ViewerRateLimiters {
     readonly navRatePerSec: RateLimit;
     readonly cursorRate: RateLimit;
     readonly probeFullRate: RateLimit;
-    readonly captureRatePerSec: number;
+    readonly captureRate: RateLimit;
     readonly ackRate: RateLimit;
   };
   private readonly connectionBuckets: Record<
@@ -349,6 +373,7 @@ export class ViewerRateLimiters {
       | 'input'
       | 'control'
       | 'nav'
+      | 'capture'
       | 'ack'
       | 'probeFull'
       | 'evaluate'
@@ -371,7 +396,7 @@ export class ViewerRateLimiters {
       readonly navRatePerSec: RateLimit;
       readonly cursorRate: RateLimit;
       readonly probeFullRate: RateLimit;
-      readonly captureRatePerSec: number;
+      readonly captureRate: RateLimit;
       readonly ackRate: RateLimit;
     },
     nowMono: number,
@@ -380,7 +405,6 @@ export class ViewerRateLimiters {
     this.limits = limits;
     this.connectionBuckets = {
       cursor: new TokenBucket(limits.cursorRate, nowMono),
-      capture: new TokenBucket(perSecondAsRateLimit(limits.captureRatePerSec), nowMono),
     };
     // `maxInboundBytesPerMin` bytes per 60000ms, expressed as a token bucket
     // seeded full so a burst at connect time does not immediately trip it.
@@ -392,13 +416,28 @@ export class ViewerRateLimiters {
 
   /**
    * `scope` is required for the {@link PER_SCOPE_BUCKETS} names: the
-   * `targetId` for `'input'`/`'control'`/`'probeFull'`/`'evaluate'`/`'evaluateInternal'`/`'pagemap'`/`'console'`/`'pageError'`/`'network'`,
+   * `targetId` for `'input'`/`'control'`/`'nav'`/`'capture'`/`'probeFull'`/`'evaluate'`/`'evaluateInternal'`/`'pagemap'`/`'console'`/`'pageError'`/`'network'`,
    * the `streamId` for `'ack'`. A
    * message of one of those types with no resolvable scope (malformed, and
    * rejected by validation downstream regardless) falls into one shared
    * `''`-keyed bucket rather than bypassing rate limiting altogether.
    */
   take(name: RateBucketName, nowMono: number, scope?: string, cost = 1): boolean {
+    return this.bucket(name, nowMono, scope).take(nowMono, cost);
+  }
+
+  /**
+   * How long the caller of a refused {@link take} should wait before the
+   * same call would pass, in whole milliseconds and never below 1. Sent as
+   * the reply's `retryAfterMs`. Looking the bucket up here creates it if a
+   * caller asks before ever taking, which is harmless: it is seeded full.
+   */
+  retryAfterMs(name: RateBucketName, nowMono: number, scope?: string, cost = 1): number {
+    const ms = this.bucket(name, nowMono, scope).msUntil(nowMono, cost);
+    return Number.isFinite(ms) ? Math.max(1, ms) : 1000;
+  }
+
+  private bucket(name: RateBucketName, nowMono: number, scope?: string): TokenBucket {
     if (PER_SCOPE_BUCKETS.has(name)) {
       const key = `${name} ${scope ?? ''}`;
       let bucket = this.perScopeBuckets.get(key);
@@ -408,23 +447,25 @@ export class ViewerRateLimiters {
             ? perSecondAsRateLimit(this.limits.inputRatePerSec)
             : name === 'nav'
               ? this.limits.navRatePerSec
-              : name === 'ack'
-                ? this.limits.ackRate
-                : name === 'probeFull'
-                  ? this.limits.probeFullRate
-                  : name === 'console' || name === 'pageError' || name === 'network'
-                    ? DIAGNOSTICS_BUCKET_DEFAULTS[name]
-                    : name === 'evaluate'
-                      ? EVALUATE_BUCKET_DEFAULT
-                      : name === 'evaluateInternal'
-                        ? INTERNAL_EVALUATE_BUCKET_DEFAULT
-                        : name === 'pagemap'
-                          ? PAGEMAP_BUCKET_DEFAULT
-                          : this.limits.controlRatePerSec;
+              : name === 'capture'
+                ? this.limits.captureRate
+                : name === 'ack'
+                  ? this.limits.ackRate
+                  : name === 'probeFull'
+                    ? this.limits.probeFullRate
+                    : name === 'console' || name === 'pageError' || name === 'network'
+                      ? DIAGNOSTICS_BUCKET_DEFAULTS[name]
+                      : name === 'evaluate'
+                        ? EVALUATE_BUCKET_DEFAULT
+                        : name === 'evaluateInternal'
+                          ? INTERNAL_EVALUATE_BUCKET_DEFAULT
+                          : name === 'pagemap'
+                            ? PAGEMAP_BUCKET_DEFAULT
+                            : this.limits.controlRatePerSec;
         bucket = new TokenBucket(limit, nowMono);
         this.perScopeBuckets.set(key, bucket);
       }
-      return bucket.take(nowMono, cost);
+      return bucket;
     }
     return this.connectionBuckets[
       name as Exclude<
@@ -432,6 +473,7 @@ export class ViewerRateLimiters {
         | 'input'
         | 'control'
         | 'nav'
+        | 'capture'
         | 'ack'
         | 'probeFull'
         | 'evaluate'
@@ -441,7 +483,7 @@ export class ViewerRateLimiters {
         | 'pageError'
         | 'network'
       >
-    ].take(nowMono, cost);
+    ];
   }
 
   /** The raw per-socket inbound byte budget, checked ahead of every bucket above (a message that fails this never reaches type dispatch at all). */

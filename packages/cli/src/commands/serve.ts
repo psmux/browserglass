@@ -41,6 +41,13 @@ function parsePoolNumber(flag: string | undefined, envVar: string): number | und
   return Number.isFinite(n) ? n : undefined;
 }
 
+/** A positive numeric flag: `undefined` when absent, `null` when present but not a positive number. */
+function parsePositiveFlag(raw: string | undefined): number | undefined | null {
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 /** `bgls serve`. */
 export const serveCommand = defineCommand({
   meta: { name: 'serve', description: 'Start a BrowserGlass gateway.' },
@@ -70,6 +77,16 @@ export const serveCommand = defineCommand({
     },
     'max-instances': { type: 'string', description: 'Default 20.' },
     'max-memory-mb': { type: 'string', description: 'Accepted; not enforced in this build.' },
+    'capture-rate': {
+      type: 'string',
+      description:
+        'Screenshots, PDFs and recording starts allowed per second, per connection per tab. Default 5 (or BGLS_CAPTURE_RATE_PER_SEC).',
+    },
+    'capture-burst': {
+      type: 'string',
+      description:
+        'How many of those may run back to back before the per second rate applies. Default 10, or twice --capture-rate (or BGLS_CAPTURE_BURST).',
+    },
     auth: { type: 'string', description: 'dev | jwks | hmac | custom. Default dev.' },
     'jwks-url': { type: 'string', description: 'Required with --auth jwks.' },
     cors: {
@@ -202,6 +219,14 @@ export const serveCommand = defineCommand({
       printer.warn('--open is registered but this build ships no built-in inspector UI to open.');
     }
 
+    const captureRatePerSec = parsePositiveFlag(args['capture-rate']);
+    const captureBurst = parsePositiveFlag(args['capture-burst']);
+    if (captureRatePerSec === null || captureBurst === null) {
+      printer.error('--capture-rate and --capture-burst take a positive number.');
+      process.exitCode = EXIT_CODES.usageError;
+      return;
+    }
+
     const poolMin = parsePoolNumber(args['store-pool-min'], 'BGLS_STORE_POOL_MIN');
     const poolMax = parsePoolNumber(args['store-pool-max'], 'BGLS_STORE_POOL_MAX');
     const poolIdleTimeoutMs = parsePoolNumber(
@@ -273,6 +298,8 @@ export const serveCommand = defineCommand({
         ...(args['max-instances'] !== undefined
           ? { maxInstances: Number(args['max-instances']) }
           : {}),
+        ...(captureRatePerSec !== undefined ? { captureRatePerSec } : {}),
+        ...(captureBurst !== undefined ? { captureBurst } : {}),
         ...(cors !== undefined ? { allowedOrigins: cors } : {}),
         ...(args['tls-cert'] !== undefined && args['tls-key'] !== undefined
           ? { tls: { certPath: args['tls-cert'], keyPath: args['tls-key'] } }

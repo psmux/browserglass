@@ -447,3 +447,45 @@ describe('resolveConfig: default observability.auditSink', () => {
     expect(resolved.observability.auditSink).toBeUndefined();
   });
 });
+
+describe('resolveConfig: limits.captureRatePerSec / captureBurst', () => {
+  const base = { mode: 'gateway', router: { endpoint: 'https://router.example.com' } } as const;
+
+  it('defaults to 5 per second with a burst of 10', () => {
+    const resolved = resolveConfig({ ...base });
+    expect(resolved.limits.captureRatePerSec).toBe(5);
+    expect(resolved.limits.captureBurst).toBe(10);
+  });
+
+  it('reads BGLS_CAPTURE_RATE_PER_SEC and BGLS_CAPTURE_BURST', () => {
+    const resolved = resolveConfig({
+      ...base,
+      env: { BGLS_CAPTURE_RATE_PER_SEC: '20', BGLS_CAPTURE_BURST: '50' },
+    });
+    expect(resolved.limits.captureRatePerSec).toBe(20);
+    expect(resolved.limits.captureBurst).toBe(50);
+  });
+
+  it('explicit config wins over env', () => {
+    const resolved = resolveConfig({
+      ...base,
+      limits: { captureRatePerSec: 2, captureBurst: 3 },
+      env: { BGLS_CAPTURE_RATE_PER_SEC: '20', BGLS_CAPTURE_BURST: '50' },
+    });
+    expect(resolved.limits.captureRatePerSec).toBe(2);
+    expect(resolved.limits.captureBurst).toBe(3);
+  });
+
+  it('setting only the rate scales the burst to twice the rate', () => {
+    const resolved = resolveConfig({ ...base, limits: { captureRatePerSec: 30 } });
+    expect(resolved.limits.captureBurst).toBe(60);
+  });
+
+  it('rejects a zero or non numeric rate', () => {
+    expect(() => resolveConfig({ ...base, limits: { captureRatePerSec: 0 } })).toThrow(ConfigError);
+    expect(() => resolveConfig({ ...base, env: { BGLS_CAPTURE_RATE_PER_SEC: 'fast' } })).toThrow(
+      ConfigError,
+    );
+    expect(() => resolveConfig({ ...base, env: { BGLS_CAPTURE_BURST: '0' } })).toThrow(ConfigError);
+  });
+});

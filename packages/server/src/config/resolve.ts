@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import {
   CAPABILITIES,
   type Capability,
+  DEFAULT_LIMITS,
   type LeaseMode,
   isCapability,
   newId,
@@ -814,6 +815,34 @@ export function resolveConfig(config: BrowserGlassConfig): ResolvedConfig {
     expected: 'a positive integer',
   });
 
+  // Per target screenshot/PDF/recording.start budget, see `captureRate` in
+  // `@browserglass/protocol`'s `DEFAULT_LIMITS`. Setting only the rate
+  // scales the burst with it, so raising the rate never leaves a burst
+  // smaller than one second's worth.
+  const captureRatePerSec = c.resolve({
+    path: 'limits.captureRatePerSec',
+    explicit: config.limits?.captureRatePerSec,
+    envKey: 'BGLS_CAPTURE_RATE_PER_SEC',
+    env,
+    parse: parseEnvNumber,
+    fallback: DEFAULT_LIMITS.captureRate.perSecond,
+    expected: 'a positive number',
+    validate: (n) => typeof n === 'number' && Number.isFinite(n) && n > 0,
+  });
+  const captureRateIsDefault = captureRatePerSec === DEFAULT_LIMITS.captureRate.perSecond;
+  const captureBurst = c.resolve({
+    path: 'limits.captureBurst',
+    explicit: config.limits?.captureBurst,
+    envKey: 'BGLS_CAPTURE_BURST',
+    env,
+    parse: parseEnvNumber,
+    fallback: captureRateIsDefault
+      ? DEFAULT_LIMITS.captureRate.burst
+      : Math.max(1, Math.ceil(captureRatePerSec * 2)),
+    expected: 'a positive integer',
+    validate: (n) => Number.isInteger(n) && n >= 1,
+  });
+
   // ---- session limits ----
   const idleTimeoutMs = c.resolve({
     path: 'session.limits.idleTimeoutMs',
@@ -1407,6 +1436,8 @@ export function resolveConfig(config: BrowserGlassConfig): ResolvedConfig {
       clipboardMaxBytes,
       maxRequestBodyBytes,
       inputRatePerSec,
+      captureRatePerSec,
+      captureBurst,
     },
 
     uploads: {

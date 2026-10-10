@@ -85,7 +85,7 @@ export function rateLimitInputsFor(resolved: ResolvedConfig): {
   navRatePerSec: typeof DEFAULT_LIMITS.navRatePerSec;
   cursorRate: typeof DEFAULT_LIMITS.cursorRate;
   probeFullRate: typeof DEFAULT_LIMITS.probeFullRate;
-  captureRatePerSec: number;
+  captureRate: typeof DEFAULT_LIMITS.captureRate;
   ackRate: typeof DEFAULT_LIMITS.ackRate;
 } {
   return {
@@ -94,7 +94,10 @@ export function rateLimitInputsFor(resolved: ResolvedConfig): {
     navRatePerSec: DEFAULT_LIMITS.navRatePerSec,
     cursorRate: DEFAULT_LIMITS.cursorRate,
     probeFullRate: DEFAULT_LIMITS.probeFullRate,
-    captureRatePerSec: DEFAULT_LIMITS.captureRatePerSec,
+    captureRate: {
+      perSecond: resolved.limits.captureRatePerSec ?? DEFAULT_LIMITS.captureRate.perSecond,
+      burst: resolved.limits.captureBurst ?? DEFAULT_LIMITS.captureRate.burst,
+    },
     ackRate: DEFAULT_LIMITS.ackRate,
   };
 }

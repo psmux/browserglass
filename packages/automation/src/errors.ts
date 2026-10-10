@@ -162,6 +162,7 @@ export class AutomationError extends Error {
       wireCode: msg.code,
       category: msg.category,
       ...(msg.context !== undefined ? { context: msg.context } : {}),
+      ...(typeof msg.retryAfterMs === 'number' ? { retryAfterMs: msg.retryAfterMs } : {}),
     });
   }
 

@@ -31,6 +31,67 @@ async def test_screenshot_returns_inline_data():
         await client.close()
 
 
+def rate_limited_then(handler, refusals, retry_after_ms=50):
+    """Refuses the first ``refusals`` captures with ``bgls.error.limit.rate``."""
+    calls = []
+
+    def wrapped(msg):
+        calls.append(msg)
+        if len(calls) <= refusals:
+            reply = {
+                "t": "error", "code": "bgls.error.limit.rate", "category": "limit",
+                "message": "Rate limit exceeded for target.capture.", "fatal": False, "retryable": True,
+            }
+            if retry_after_ms is not None:
+                reply["retryAfterMs"] = retry_after_ms
+            return reply
+        return handler(msg)
+
+    return wrapped, calls
+
+
+@pytest.mark.asyncio
+async def test_screenshot_retries_once_after_rate_limit():
+    handler, calls = rate_limited_then(capture_handler(), refusals=1, retry_after_ms=50)
+    client, socket = await connect_client({"target.capture": handler})
+    try:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        shot = await client.screenshot()
+        assert shot.data == "aGVsbG8="
+        assert len(calls) == 2
+        assert loop.time() - started >= 0.045
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_screenshot_second_rate_limit_refusal_raises_policy_denied():
+    handler, calls = rate_limited_then(capture_handler(), refusals=2, retry_after_ms=20)
+    client, socket = await connect_client({"target.capture": handler})
+    try:
+        with pytest.raises(AutomationError) as excinfo:
+            await client.screenshot()
+        assert excinfo.value.code == "POLICY_DENIED"
+        assert excinfo.value.details["retry_after_ms"] == 20
+        assert len(calls) == 2
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_screenshot_does_not_wait_for_a_long_retry_hint():
+    handler, calls = rate_limited_then(capture_handler(), refusals=1, retry_after_ms=60_000)
+    client, socket = await connect_client({"target.capture": handler})
+    try:
+        with pytest.raises(AutomationError) as excinfo:
+            await client.screenshot()
+        assert excinfo.value.code == "POLICY_DENIED"
+        assert len(calls) == 1
+    finally:
+        await client.close()
+
+
 @pytest.mark.asyncio
 async def test_screenshot_without_inline_data_is_not_implemented():
     def handler(msg):

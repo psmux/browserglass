@@ -164,6 +164,10 @@ export interface EmbeddedGatewayOptions {
   /** `0` binds an ephemeral port; the resolved port is read back from the listening socket. Default 7443. */
   readonly listenPort?: number;
   readonly maxInstances?: number;
+  /** `--capture-rate`: screenshots/PDFs per second per target. Omitted means the server's own `BGLS_CAPTURE_RATE_PER_SEC`/default chain decides. */
+  readonly captureRatePerSec?: number;
+  /** `--capture-burst`: back to back screenshots allowed per target before the steady rate applies. */
+  readonly captureBurst?: number;
   readonly basePath?: string;
   /** Passed to `runtime-host`'s `HostRuntimeConfig.killOnShutdown`. Default `false` (matches the `keepBrowsersAlive` default). `doctor --deep` sets `true` so its throwaway browser never survives the check. */
   readonly killOnShutdown?: boolean;
@@ -386,7 +390,22 @@ async function buildEmbeddedGatewayInner(opts: EmbeddedGatewayOptions): Promise<
       // reading the server's own docs would expect to control it. Omitting
       // the field when the flag is absent lets `resolveConfig()`'s own
       // env-var-then-fallback chain govern instead.
-      ...(opts.maxInstances !== undefined ? { limits: { maxInstances: opts.maxInstances } } : {}),
+      // The same rule applies to the capture limits: only an explicit flag
+      // is passed, so `BGLS_CAPTURE_RATE_PER_SEC`/`BGLS_CAPTURE_BURST` keep
+      // working when the flags are absent.
+      ...(opts.maxInstances !== undefined ||
+      opts.captureRatePerSec !== undefined ||
+      opts.captureBurst !== undefined
+        ? {
+            limits: {
+              ...(opts.maxInstances !== undefined ? { maxInstances: opts.maxInstances } : {}),
+              ...(opts.captureRatePerSec !== undefined
+                ? { captureRatePerSec: opts.captureRatePerSec }
+                : {}),
+              ...(opts.captureBurst !== undefined ? { captureBurst: opts.captureBurst } : {}),
+            },
+          }
+        : {}),
       ...(opts.recordingsDir !== undefined ? { recordings: { dir: opts.recordingsDir } } : {}),
       auth: { keys: [key], issuer: appId, resolver: authResolver },
       ...(opts.allowedOrigins !== undefined
