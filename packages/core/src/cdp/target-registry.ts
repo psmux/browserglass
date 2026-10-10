@@ -222,6 +222,7 @@ export interface StealthProfileHooks {
   onTargetAttached: (ctx: StealthTargetContext) => Promise<void>;
 }
 
+const __T=(...a: unknown[])=>{ if (process.env['BGLS_TRACE_NAV']) console.error('[TRACE]', Date.now()%100000, ...a); };
 /** The concrete `TargetRegistry` implementation. */
 export class TargetRegistryImpl implements TargetRegistry {
   readonly instanceId: InstanceId;
@@ -721,6 +722,7 @@ export class TargetRegistryImpl implements TargetRegistry {
   // ── raw event handlers ───────────────────────────────────────────────
 
   private handleTargetInfoChanged(raw: RawTargetInfo): void {
+    __T('infoChanged', raw.targetId.slice(0,6), raw.url);
     const existingTimer = this.infoChangedDebounce.get(raw.targetId);
     if (existingTimer) {
       clearTimer(existingTimer);
@@ -800,6 +802,7 @@ export class TargetRegistryImpl implements TargetRegistry {
    */
   private wirePageDomain(target: TargetRuntime, sessionId: string): void {
     if (target.type !== 'page' || this.disposed) return;
+    __T('wirePageDomain', target.cdpTargetId.slice(0,6), sessionId.slice(0,6), this.pageDomainUnsubs.get(target.cdpTargetId)?.sessionId?.slice(0,6));
 
     // A page session comes into existence through two paths that can both
     // fire for the same target: `attach()` builds one on demand, and
@@ -826,6 +829,7 @@ export class TargetRegistryImpl implements TargetRegistry {
       this.bridge.on(
         'Page.frameStartedLoading',
         (params) => {
+          __T('frameStartedLoading', target.cdpTargetId.slice(0,6), isMainFrame(params['frameId']));
           if (isMainFrame(params['frameId'])) setLoading(true);
         },
         sessionId as never,
@@ -846,6 +850,7 @@ export class TargetRegistryImpl implements TargetRegistry {
           // A cross process navigation can mint a new main frame id, so the
           // top level frame is identified by having no parent rather than by
           // matching what the frame tree said at attach time.
+          __T('frameNavigated', target.cdpTargetId.slice(0,6), frame?.parentId);
           if (frame?.parentId !== undefined) return;
           if (frame?.id) target.mainFrameId = frame.id;
           void this.refreshNavigationHistory(target, sessionId);
@@ -905,13 +910,15 @@ export class TargetRegistryImpl implements TargetRegistry {
         currentIndex: number;
         entries: readonly unknown[];
       };
+      __T('history', target.cdpTargetId.slice(0,6), history.currentIndex, history.entries.length);
       const canGoBack = history.currentIndex > 0;
       const canGoForward = history.currentIndex < history.entries.length - 1;
       if (target.canGoBack === canGoBack && target.canGoForward === canGoForward) return;
       target.canGoBack = canGoBack;
       target.canGoForward = canGoForward;
       this.emit('updated', target);
-    } catch {
+    } catch (e) {
+      __T('history failed', target.cdpTargetId.slice(0,6), String(e));
       // Best effort: a history read racing a closing target must not become
       // an unhandled rejection or a fabricated answer.
     }
@@ -920,6 +927,7 @@ export class TargetRegistryImpl implements TargetRegistry {
   /** Drops the `Page` subscriptions for one target and resets what they maintained, so a detached tab never reports stale navigation state. */
   private teardownPageDomain(cdpTargetId: string): void {
     const entry = this.pageDomainUnsubs.get(cdpTargetId);
+    __T('teardownPageDomain', cdpTargetId.slice(0,6), !!entry, new Error().stack?.split(String.fromCharCode(10)).slice(2,5).join('|'));
     if (!entry) return;
     for (const off of entry.unsubs) off();
     this.pageDomainUnsubs.delete(cdpTargetId);

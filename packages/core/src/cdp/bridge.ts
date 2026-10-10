@@ -743,6 +743,7 @@ export class CdpBridgeImpl implements CdpBridge {
       }, timeoutMs);
 
       const payload = JSON.stringify({ id, method, params: params ?? {}, sessionId });
+      if (process.env['BGLS_TRACE_NAV'] && /^(Page|Target\.(activate|attach|detach))/.test(method)) console.error('[TRACE]', Date.now()%100000, 'send', id, method, String(sessionId).slice(0,6));
       this.ws?.send(payload);
       this.statSent += 1;
       this.statBytesOut += payload.length;
@@ -838,6 +839,7 @@ export class CdpBridgeImpl implements CdpBridge {
       this.inflight.delete(msg.id);
       clearTimer(pending.timer);
       const elapsedMs = monotonicNow() - pending.sentAt;
+      if (process.env['BGLS_TRACE_NAV'] && /^(Page|Target\.(activate|attach|detach))/.test(pending.method)) console.error('[TRACE]', Date.now()%100000, 'reply', msg.id, pending.method, elapsedMs, msg.error ? JSON.stringify(msg.error) : '');
       if (msg.error) {
         this.statProtocolErrors += 1;
         pending.reject(
