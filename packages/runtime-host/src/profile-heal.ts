@@ -268,13 +268,25 @@ function hasOsPasswordAnswer(state: Record<string, unknown>): boolean {
   return !!pm && pm['os_password_last_changed'] !== undefined && pm['os_password_blank'] !== undefined;
 }
 
+/**
+ * A Local State Chrome trusts as a seed: the answer, plus the state Chrome
+ * keeps once it has fetched its variations. One taken right after the answer,
+ * before that fetch, was not trusted in testing. Ephemeral profiles start
+ * without background networking and never get there, so the seed has to come
+ * from a profile that had network (a persistent one, or a Chrome started for
+ * the purpose).
+ */
+function trustedSeed(state: Record<string, unknown>): boolean {
+  return hasOsPasswordAnswer(state) && state['variations_seed_date'] !== undefined && state['variations_last_fetch_time'] !== undefined;
+}
+
 /** Keeps a profile's Local State as the machine's seed when it has Chrome's answer and no seed exists yet. */
 export function captureLocalStateSeed(profilePath: string): boolean {
   const seed = localStateSeedPath();
   if (existsSync(seed)) return false;
   try {
     const state = JSON.parse(readFileSync(join(profilePath, 'Local State'), 'utf8')) as Record<string, unknown>;
-    if (!hasOsPasswordAnswer(state)) return false;
+    if (!trustedSeed(state)) return false;
     mkdirSync(dirname(seed), { recursive: true });
     writeFileSync(`${seed}.tmp`, JSON.stringify(state), 'utf8');
     renameSync(`${seed}.tmp`, seed);
@@ -305,7 +317,7 @@ function seedOsPasswordCheck(profilePath: string): boolean {
   } catch {
     return false; // No seed yet: this Chrome asks once, and its answer becomes the seed.
   }
-  if (!hasOsPasswordAnswer(seed)) return false;
+  if (!trustedSeed(seed)) return false;
   // The seed under what the profile has, except the answer, which comes from the seed.
   const merged = { ...seed, ...(state ?? {}), password_manager: { ...((state?.['password_manager'] as object) ?? {}), ...(seed['password_manager'] as object) } };
   try {
