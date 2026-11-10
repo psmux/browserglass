@@ -111,6 +111,10 @@ const DISABLED_FEATURES = [
   'CalculateNativeWinOcclusion',
   'InfiniteSessionRestore',
   'PasswordManagerOnboarding',
+  // WebAuthn and passkeys through Windows Hello open a Windows Security
+  // prompt on the real desktop. Input meant for the page can land in it and
+  // fail logons for the signed in account until Windows locks it.
+  'WebAuthenticationUseNativeWinApi',
 ] as const;
 
 /**
@@ -229,7 +233,12 @@ function headlessFlag(mode: HeadlessMode): string | null {
 
 function platformSpecificFlags(): string[] {
   const flags: string[] = [];
-  if (process.platform === 'win32') flags.push('--no-service-autorun');
+  if (process.platform === 'win32') {
+    flags.push('--no-service-autorun');
+    // No integrated (NTLM, Kerberos) sign in with the Windows account, and
+    // no OS reauthentication prompt from the password manager.
+    flags.push('--auth-server-allowlist=browserglass-none.invalid', '--auth-negotiate-delegate-allowlist=browserglass-none.invalid', '--password-store=basic');
+  }
   if (process.platform === 'linux') flags.push('--password-store=basic');
   if (process.platform === 'darwin') flags.push('--use-mock-keychain');
   return flags;

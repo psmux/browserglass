@@ -50,8 +50,9 @@
  * killed every pre-existing Chrome on this data dir.
  */
 
-import { existsSync, lstatSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { SINGLETON_LOCK_FILES, chromeProcsForDataDirAsync } from './process-table.js';
 
 /**
@@ -118,6 +119,7 @@ export async function healProfile(profilePath: string, opts?: HealOptions): Prom
   }
 
   const fixed: string[] = [];
+  if (seedOsPasswordCheck(profilePath)) fixed.push('os password check seeded');
 
   // 1. The lock files. POSIX only in practice, since Windows Chrome
   //    leaves none, but attempted on every platform because a
@@ -238,4 +240,80 @@ export async function healProfile(profilePath: string, opts?: HealOptions): Prom
   }
 
   return { fixed, inUse: false, heldByPid: null };
+}
+
+/**
+ * Chrome on Windows checks at startup whether the signed in user's password
+ * is blank, by calling LogonUser with an empty password. Each call is a
+ * failed interactive logon in the Security log. Chrome skips it when the
+ * profile's Local State already holds an earlier answer, but a fresh profile
+ * has none, so a runtime that launches many fresh profiles locks the account
+ * out under any lockout policy (10 in 10 minutes is common).
+ *
+ * Seeding only the answer (`password_manager.os_password_blank` and
+ * `os_password_last_changed`) is not enough: Chrome asked again on every such
+ * profile in testing. A whole Local State that Chrome itself wrote after
+ * answering is trusted. So one is kept per machine (BGLS_LOCAL_STATE_SEED, or
+ * `~/.browserglass/local-state-seed.json`), taken from the first profile that
+ * has the answer, and copied into every profile that has none. Its other keys
+ * (variations, metrics ids) carry no state a test depends on. The first Chrome
+ * on a machine still asks once.
+ */
+export function localStateSeedPath(): string {
+  return process.env['BGLS_LOCAL_STATE_SEED'] ?? join(homedir(), '.browserglass', 'local-state-seed.json');
+}
+
+function hasOsPasswordAnswer(state: Record<string, unknown>): boolean {
+  const pm = state['password_manager'] as Record<string, unknown> | undefined;
+  return !!pm && pm['os_password_last_changed'] !== undefined && pm['os_password_blank'] !== undefined;
+}
+
+/** Keeps a profile's Local State as the machine's seed when it has Chrome's answer and no seed exists yet. */
+export function captureLocalStateSeed(profilePath: string): boolean {
+  const seed = localStateSeedPath();
+  if (existsSync(seed)) return false;
+  try {
+    const state = JSON.parse(readFileSync(join(profilePath, 'Local State'), 'utf8')) as Record<string, unknown>;
+    if (!hasOsPasswordAnswer(state)) return false;
+    mkdirSync(dirname(seed), { recursive: true });
+    writeFileSync(`${seed}.tmp`, JSON.stringify(state), 'utf8');
+    renameSync(`${seed}.tmp`, seed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function seedOsPasswordCheck(profilePath: string): boolean {
+  if (process.platform !== 'win32') return false;
+  const file = join(profilePath, 'Local State');
+  let state: Record<string, unknown> | undefined;
+  if (existsSync(file)) {
+    try {
+      state = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    } catch {
+      return false; // An unreadable Local State is Chrome's to repair, not ours.
+    }
+    if (hasOsPasswordAnswer(state)) {
+      captureLocalStateSeed(profilePath);
+      return false;
+    }
+  }
+  let seed: Record<string, unknown>;
+  try {
+    seed = JSON.parse(readFileSync(localStateSeedPath(), 'utf8')) as Record<string, unknown>;
+  } catch {
+    return false; // No seed yet: this Chrome asks once, and its answer becomes the seed.
+  }
+  if (!hasOsPasswordAnswer(seed)) return false;
+  // The seed under what the profile has, except the answer, which comes from the seed.
+  const merged = { ...seed, ...(state ?? {}), password_manager: { ...((state?.['password_manager'] as object) ?? {}), ...(seed['password_manager'] as object) } };
+  try {
+    writeFileSync(`${file}.bgls-heal-tmp`, JSON.stringify(merged), 'utf8');
+    renameSync(`${file}.bgls-heal-tmp`, file);
+    return true;
+  } catch {
+    rmSync(`${file}.bgls-heal-tmp`, { force: true });
+    return false;
+  }
 }

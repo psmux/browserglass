@@ -134,21 +134,17 @@ export async function killProcessTree(
   signal: NodeJS.Signals = 'SIGTERM',
 ): Promise<void> {
   if (platform() === 'win32') {
-    try {
-      // No `stdio: 'ignore'` needed here the way the old `execFileSync`
-      // call required it: `execFile`'s promisified form does not inherit
-      // this process's stdio at all, it captures stdout/stderr into the
-      // resolved/rejected result, which is simply discarded below. A
-      // target that already exited (a real, harmless race between this
-      // check and taskkill's own lookup) makes taskkill exit non-zero,
-      // which is not worth surfacing since the catch below already
-      // treats it as success.
-      await execFileAsync('taskkill', ['/T', '/F', '/PID', String(pid)], {
-        timeout: 5000,
-        windowsHide: true,
-      });
-    } catch {
-      // Already gone, or taskkill could not find it; both are fine here.
+    // Never `taskkill /T`: it walks parent ids, and Windows reuses ids. A
+    // process keeps the id of a parent that ended, so an id read a moment ago
+    // (or a stale one) can pull an unrelated tree into the kill: a terminal
+    // multiplexer and every shell under it. Walk the table ourselves and count
+    // a child only when it was created after its parent.
+    for (const p of await windowsTreeOf(pid)) {
+      try {
+        process.kill(p);
+      } catch {
+        // Already gone.
+      }
     }
     return;
   }
@@ -198,4 +194,44 @@ async function processGroupHasLiveMember(pgid: number): Promise<boolean> {
     if (!live || Date.now() >= deadline) return live;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}
+
+/**
+ * `pid` and the processes it started, leaves first, from one snapshot of the
+ * process table. A child counts only when its creation time is not earlier
+ * than its parent's (one second of slack), so an orphan whose dead parent had
+ * the same id, and everything under it, is left out. This process and its
+ * parents are never in the list.
+ */
+async function windowsTreeOf(pid: number): Promise<number[]> {
+  const script =
+    "Get-CimInstance Win32_Process | ForEach-Object { $c = 0; if ($_.CreationDate) { $c = [long](($_.CreationDate.ToUniversalTime() - [datetime]'1970-01-01').TotalMilliseconds) }; \"$($_.ProcessId),$($_.ParentProcessId),$c\" }";
+  let stdout = '';
+  try {
+    ({ stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 20_000, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }));
+  } catch {
+    return [];
+  }
+  const rows = new Map<number, { ppid: number; created: number }>();
+  for (const line of stdout.split(/\r?\n/)) {
+    const m = /^(\d+),(\d+),(\d+)$/.exec(line.trim());
+    if (m) rows.set(Number(m[1]), { ppid: Number(m[2]), created: Number(m[3]) });
+  }
+  if (!rows.has(pid)) return [];
+  const mine = new Set<number>([process.pid]);
+  for (let cur = rows.get(process.pid); cur && !mine.has(cur.ppid) && rows.has(cur.ppid); cur = rows.get(cur.ppid)) mine.add(cur.ppid);
+  if (mine.has(pid)) return [];
+  const kids = new Map<number, number[]>();
+  for (const [p, r] of rows) if (p !== r.ppid) kids.set(r.ppid, [...(kids.get(r.ppid) ?? []), p]);
+  const out = [pid];
+  for (let i = 0; i < out.length; i++) {
+    const parent = rows.get(out[i]!)!;
+    for (const c of kids.get(out[i]!) ?? []) {
+      const child = rows.get(c)!;
+      if (out.includes(c) || mine.has(c)) continue;
+      if (parent.created && child.created && child.created + 1000 < parent.created) continue;
+      out.push(c);
+    }
+  }
+  return out.reverse();
 }
