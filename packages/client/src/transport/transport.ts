@@ -148,6 +148,8 @@ export class Transport {
   private ticket: string | null;
   private token: string | null;
   private ticketConsumed = false;
+  /** Whether `token` came from `options.credentials()`: such a token is presented once, then asked for again. */
+  private tokenFromCallback = false;
   private ticketConsumedRetried = false;
 
   private desiredSubscriptions: DesiredSubscription[];
@@ -481,6 +483,7 @@ export class Transport {
     }
     this.ticket = result.ticket ?? null;
     this.token = result.token ?? null;
+    this.tokenFromCallback = !!result.token;
     this.ticketConsumed = false;
     return result;
   }
@@ -519,6 +522,10 @@ export class Transport {
     ws.onopen = () => {
       if (this.destroyed || this.ws !== ws) return;
       if (credential.ticket) this.ticketConsumed = true;
+      // A token from the credentials callback is used once: the next connect asks the callback again, so a
+      // host that mints a single use token per socket never sees one presented twice. A token from
+      // options.token is kept for reconnects as before.
+      if (credential.token && this.tokenFromCallback && this.token === credential.token) this.token = null;
       if (this.fsm.state === 'connecting') this.fsm.transition('handshaking', 'ws_open');
       this.sendHello(credential);
     };
