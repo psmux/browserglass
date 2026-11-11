@@ -405,7 +405,12 @@ export class Session {
       outcome = transition(SESSION_TRANSITIONS, 'Session', this.id, this._state, event, ctx);
     } catch (err) {
       // A viewer coming or going, or a timer, never ends a session or the gateway, whatever state the session is in.
-      if (event === 'viewerAttached' || event === 'lastViewerLeft' || event === 'idleTimerFired' || event === 'graceTimerFired') {
+      if (
+        event === 'viewerAttached' ||
+        event === 'lastViewerLeft' ||
+        event === 'idleTimerFired' ||
+        event === 'graceTimerFired'
+      ) {
         return { kind: 'ignored', reason: `no ${event} rule in ${this._state}` };
       }
       throw err;

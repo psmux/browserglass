@@ -558,7 +558,7 @@ describe('buildLaunchArgs, certificate errors', () => {
   const argsFor = () =>
     buildLaunchArgs({
       spec: fixtureBrowserSpec(),
-      profilePath: 'C:\profiles\p1',
+      profilePath: 'C:profilesp1',
       profileMode: 'persistent',
       allowNoSandbox: false,
     }).args;

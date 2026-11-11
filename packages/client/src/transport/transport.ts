@@ -525,7 +525,8 @@ export class Transport {
       // A token from the credentials callback is used once: the next connect asks the callback again, so a
       // host that mints a single use token per socket never sees one presented twice. A token from
       // options.token is kept for reconnects as before.
-      if (credential.token && this.tokenFromCallback && this.token === credential.token) this.token = null;
+      if (credential.token && this.tokenFromCallback && this.token === credential.token)
+        this.token = null;
       if (this.fsm.state === 'connecting') this.fsm.transition('handshaking', 'ws_open');
       this.sendHello(credential);
     };

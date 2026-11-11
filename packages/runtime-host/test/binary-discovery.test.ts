@@ -68,7 +68,6 @@ describe('resolveChromeBinary, a host that names its Chrome', () => {
   const withEnv = (vars: Record<string, string | undefined>, fn: () => void) => {
     const prior = Object.fromEntries(Object.keys(vars).map((k) => [k, process.env[k]]));
     for (const [k, v] of Object.entries(vars)) {
-      // biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"; the variable must be removed.
       if (v === undefined) delete process.env[k];
       else process.env[k] = v;
     }
@@ -76,7 +75,6 @@ describe('resolveChromeBinary, a host that names its Chrome', () => {
       fn();
     } finally {
       for (const [k, v] of Object.entries(prior)) {
-        // biome-ignore lint/performance/noDelete: see above.
         if (v === undefined) delete process.env[k];
         else process.env[k] = v;
       }
@@ -84,7 +82,7 @@ describe('resolveChromeBinary, a host that names its Chrome', () => {
   };
 
   it('never falls back to another Chrome when BGLS_CHROME_PATH names one that is missing', () => {
-    const missing = process.platform === 'win32' ? 'C:\nowhere\chrome.exe' : '/nowhere/chrome';
+    const missing = process.platform === 'win32' ? 'C:\nowherechrome.exe' : '/nowhere/chrome';
     withEnv({ BGLS_CHROME_PATH: missing, BGLS_NO_SYSTEM_CHROME: undefined }, () => {
       try {
         resolveChromeBinary('chrome');

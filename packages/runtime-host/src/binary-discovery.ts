@@ -310,7 +310,8 @@ export function resolveChromeBinary(
     if (!existsSync(candidate)) continue;
     // A pinned binary (BGLS_CHROME_PATH) is used even when it cannot report its version (a Chrome for Testing
     // build without the version resource); any other one that cannot is skipped.
-    const pinned = !!process.env['BGLS_CHROME_PATH'] && candidate === process.env['BGLS_CHROME_PATH'];
+    const pinned =
+      !!process.env['BGLS_CHROME_PATH'] && candidate === process.env['BGLS_CHROME_PATH'];
     const version = versionFor(candidate) ?? (pinned ? 'unknown' : null);
     if (!version) continue; // A binary that cannot report a version counts as not found; keep searching.
     const st = statSync(candidate);

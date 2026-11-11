@@ -80,7 +80,7 @@ describe('Session state machine', () => {
     expect(session.state).toBe('ended');
   });
 
-  it('addViewer requires the session already be provisioned (live/idle), matching the illegal-transition contract', async () => {
+  it('a viewer that attaches while the session still provisions leaves it provisioning, never throwing or ending it', async () => {
     const { bridge, registry, world, instanceId } = await startFakeRegistry();
     world.targetInfos = [];
     await registry.resync();
@@ -95,7 +95,7 @@ describe('Session state machine', () => {
       clock,
       onEffect: () => {},
     });
-    // Not yet provisioned: still in `provisioning`, which has no `viewerAttached` row and is not terminal.
+    // Not yet provisioned: a viewer can arrive before the browser is up (a wall page that reconnects).
     expect(() =>
       session.addViewer({
         id: 'vwr_1',
@@ -107,7 +107,8 @@ describe('Session state machine', () => {
         isAdmin: false,
         connectedAtMs: 0,
       }),
-    ).toThrow(InvalidStateTransition);
+    ).not.toThrow();
+    expect(session.state).toBe('provisioning');
   });
 
   it('reaches live once provisioned, and addViewer/removeViewer round-trips through live -> live -> idle', async () => {

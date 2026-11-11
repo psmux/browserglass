@@ -237,7 +237,11 @@ function platformSpecificFlags(): string[] {
     flags.push('--no-service-autorun');
     // No integrated (NTLM, Kerberos) sign in with the Windows account, and
     // no OS reauthentication prompt from the password manager.
-    flags.push('--auth-server-allowlist=browserglass-none.invalid', '--auth-negotiate-delegate-allowlist=browserglass-none.invalid', '--password-store=basic');
+    flags.push(
+      '--auth-server-allowlist=browserglass-none.invalid',
+      '--auth-negotiate-delegate-allowlist=browserglass-none.invalid',
+      '--password-store=basic',
+    );
   }
   if (process.platform === 'linux') flags.push('--password-store=basic');
   if (process.platform === 'darwin') flags.push('--use-mock-keychain');

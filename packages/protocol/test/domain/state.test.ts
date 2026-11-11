@@ -61,14 +61,27 @@ describe('transition()', () => {
 
   it('keeps a starting or recovering session through viewers coming and going and its timers', () => {
     for (const ev of ['viewerAttached', 'lastViewerLeft'] as const) {
-      expect(transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'provisioning', ev, {})).toEqual({ kind: 'ok', to: 'provisioning' });
-      expect(transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'recovering', ev, {})).toEqual({ kind: 'ok', to: 'recovering' });
+      expect(transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'provisioning', ev, {})).toEqual({
+        kind: 'ok',
+        to: 'provisioning',
+      });
+      expect(transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'recovering', ev, {})).toEqual({
+        kind: 'ok',
+        to: 'recovering',
+      });
     }
     for (const ev of ['idleTimerFired', 'graceTimerFired', 'instanceRecovering'] as const) {
-      expect(transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'recovering', ev, {})).toEqual({ kind: 'ok', to: 'recovering' });
+      expect(transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'recovering', ev, {})).toEqual({
+        kind: 'ok',
+        to: 'recovering',
+      });
     }
-    expect(transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'recovering', 'maxDurationFired', {})).toEqual({ kind: 'ok', to: 'ended' });
-    expect(transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'provisioning', 'shutdown', {})).toEqual({ kind: 'ok', to: 'ended' });
+    expect(
+      transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'recovering', 'maxDurationFired', {}),
+    ).toEqual({ kind: 'ok', to: 'ended' });
+    expect(
+      transition(SESSION_TRANSITIONS, 'Session', 'sess_x', 'provisioning', 'shutdown', {}),
+    ).toEqual({ kind: 'ok', to: 'ended' });
   });
 
   it('returns {kind:"ignored"} for any event from the terminal Session state, ended', () => {
