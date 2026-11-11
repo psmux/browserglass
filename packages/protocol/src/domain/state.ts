@@ -282,6 +282,10 @@ export const SESSION_TRANSITIONS: TransitionTable<SessionState, SessionEvent> = 
       },
     ],
     provisionFailed: [{ to: 'ended' }],
+    // A viewer may come or go while the browser still starts; the session keeps starting.
+    viewerAttached: [{ to: 'provisioning' }],
+    lastViewerLeft: [{ to: 'provisioning' }],
+    shutdown: [{ to: 'ended' }],
   },
   live: {
     viewerAttached: [{ to: 'live' }],
@@ -306,6 +310,13 @@ export const SESSION_TRANSITIONS: TransitionTable<SessionState, SessionEvent> = 
     shutdown: [{ to: 'ended' }],
   },
   recovering: {
+    // Viewers and timers during a recovery leave it recovering; only the hard limit ends it.
+    viewerAttached: [{ to: 'recovering' }],
+    lastViewerLeft: [{ to: 'recovering' }],
+    idleTimerFired: [{ to: 'recovering' }],
+    graceTimerFired: [{ to: 'recovering' }],
+    maxDurationFired: [{ to: 'ended' }],
+    instanceRecovering: [{ to: 'recovering' }],
     recovered: [
       {
         to: 'live',
