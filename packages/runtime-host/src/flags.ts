@@ -309,6 +309,8 @@ export function buildLaunchArgs(opts: BuildLaunchArgsOptions): BuiltLaunchArgs {
     '--remote-debugging-port=0',
     ...UNCONDITIONAL_BASE_FLAGS,
     ...platformSpecificFlags(),
+    // A host that tests sites with self signed or internal certificates opts in for every browser it starts.
+    ...(process.env['BGLS_IGNORE_CERT_ERRORS'] === '1' ? ['--ignore-certificate-errors'] : []),
   ];
 
   const headless = headlessFlag(spec.headless);

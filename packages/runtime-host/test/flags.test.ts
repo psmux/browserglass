@@ -553,3 +553,28 @@ describe('BrowserSpec.extensions reaches the command line', () => {
     ]);
   });
 });
+
+describe('buildLaunchArgs, certificate errors', () => {
+  const argsFor = () =>
+    buildLaunchArgs({
+      spec: fixtureBrowserSpec(),
+      profilePath: 'C:\profiles\p1',
+      profileMode: 'persistent',
+      allowNoSandbox: false,
+    }).args;
+
+  it('lets certificate errors through only when the host sets BGLS_IGNORE_CERT_ERRORS=1', () => {
+    const prior = process.env['BGLS_IGNORE_CERT_ERRORS'];
+    try {
+      // biome-ignore lint/performance/noDelete: assigning undefined to process.env stores the string "undefined"; the variable must be removed.
+      delete process.env['BGLS_IGNORE_CERT_ERRORS'];
+      expect(argsFor()).not.toContain('--ignore-certificate-errors');
+      process.env['BGLS_IGNORE_CERT_ERRORS'] = '1';
+      expect(argsFor()).toContain('--ignore-certificate-errors');
+    } finally {
+      // biome-ignore lint/performance/noDelete: see above.
+      if (prior === undefined) delete process.env['BGLS_IGNORE_CERT_ERRORS'];
+      else process.env['BGLS_IGNORE_CERT_ERRORS'] = prior;
+    }
+  });
+});
