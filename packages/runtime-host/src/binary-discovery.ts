@@ -246,10 +246,15 @@ function candidateList(
   binaries?: Partial<Record<BrowserChannel, string>>,
 ): string[] {
   const candidates: string[] = [];
+  // A host that names its Chrome gets that one or none: no fallback to another Chrome on the machine.
+  const set = process.env['BGLS_CHROME_PATH'];
+  if (set) return [set];
   const env = envPath();
   if (env) candidates.push(env);
   const cfg = configPath(channel, binaries);
   if (cfg) candidates.push(cfg);
+  // BGLS_NO_SYSTEM_CHROME=1: only the configured binaries, never the Chrome installed for the machine's user.
+  if (process.env['BGLS_NO_SYSTEM_CHROME'] === '1') return candidates;
 
   const p = platform();
   if (p === 'win32') {
@@ -303,7 +308,10 @@ export function resolveChromeBinary(
   for (const candidate of candidateList(channel, binaries)) {
     searched.push(candidate);
     if (!existsSync(candidate)) continue;
-    const version = versionFor(candidate);
+    // A pinned binary (BGLS_CHROME_PATH) is used even when it cannot report its version (a Chrome for Testing
+    // build without the version resource); any other one that cannot is skipped.
+    const pinned = !!process.env['BGLS_CHROME_PATH'] && candidate === process.env['BGLS_CHROME_PATH'];
+    const version = versionFor(candidate) ?? (pinned ? 'unknown' : null);
     if (!version) continue; // A binary that cannot report a version counts as not found; keep searching.
     const st = statSync(candidate);
     const resolved: ResolvedBinary = {
