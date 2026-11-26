@@ -61,6 +61,11 @@ export const ARG_ALLOW: readonly RegExp[] = [
   /^--font-render-hinting=(none|slight|medium|full)$/,
   /^--lang=[A-Za-z-]+$/,
   /^--js-flags=--max-old-space-size=\d+$/,
+  // A fake camera and microphone for tests that need media (a call between two browsers), and Chrome answering
+  // its own permission prompt for them. Not --use-file-for-fake-video-capture: that reads a file off the host.
+  // A page can tell fake devices by their labels, so a run that must look human grants a real device instead.
+  /^--use-fake-device-for-media-stream$/,
+  /^--use-fake-ui-for-media-stream$/,
 ] as const;
 
 /**
