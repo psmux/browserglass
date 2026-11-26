@@ -348,7 +348,12 @@ describe('headless launches look like a headful Chrome of the same build', () =>
       { spec: fixtureBrowserSpec({ headless: 'off' }), browserVersion: '158.0.1.2' },
       { spec: fixtureBrowserSpec({ headless: 'new' }) },
     ]) {
-      const built = buildLaunchArgs({ ...o, profilePath: 'C:profilesp1', profileMode: 'ephemeral', allowNoSandbox: false });
+      const built = buildLaunchArgs({
+        ...o,
+        profilePath: 'C:profilesp1',
+        profileMode: 'ephemeral',
+        allowNoSandbox: false,
+      });
       expect(built.args.some((a) => a.startsWith('--user-agent'))).toBe(false);
     }
   });
@@ -361,17 +366,27 @@ describe('headless launches look like a headful Chrome of the same build', () =>
       allowNoSandbox: false,
       browserVersion: '158.0.1.2',
     });
-    expect(built.args.filter((a) => a.startsWith('--user-agent'))).toEqual(['--user-agent=TestAgent/1.0']);
+    expect(built.args.filter((a) => a.startsWith('--user-agent'))).toEqual([
+      '--user-agent=TestAgent/1.0',
+    ]);
   });
 
   it('makes a headful window big enough for the page and the frame around it', () => {
     const built = buildLaunchArgs({
-      spec: fixtureBrowserSpec({ headless: 'off', viewport: { width: 1366, height: 768, deviceScaleFactor: 1 }, window: null }),
+      spec: fixtureBrowserSpec({
+        headless: 'off',
+        viewport: { width: 1366, height: 768, deviceScaleFactor: 1 },
+        window: null,
+      }),
       profilePath: 'p',
       profileMode: 'persistent',
       allowNoSandbox: false,
     });
-    const [w, h] = built.args.find((a) => a.startsWith('--window-size='))!.slice('--window-size='.length).split(',').map(Number);
+    const [w, h] = built.args
+      .find((a) => a.startsWith('--window-size='))!
+      .slice('--window-size='.length)
+      .split(',')
+      .map(Number);
     expect(w).toBeGreaterThanOrEqual(1366);
     expect(h).toBeGreaterThan(768 + 60);
   });
@@ -383,9 +398,15 @@ describe('headless launches look like a headful Chrome of the same build', () =>
       profileMode: 'ephemeral',
       allowNoSandbox: false,
     });
-    const m = /^--screen-info=\{(\d+)x(\d+)\}$/.exec(built.args.find((a) => a.startsWith('--screen-info=')) ?? '');
+    const m = /^--screen-info=\{(\d+)x(\d+)\}$/.exec(
+      built.args.find((a) => a.startsWith('--screen-info=')) ?? '',
+    );
     expect(m).not.toBeNull();
-    const size = built.args.find((a) => a.startsWith('--window-size='))!.slice('--window-size='.length).split(',').map(Number);
+    const size = built.args
+      .find((a) => a.startsWith('--window-size='))!
+      .slice('--window-size='.length)
+      .split(',')
+      .map(Number);
     expect(Number(m![1])).toBeGreaterThanOrEqual(size[0]!);
     expect(Number(m![2])).toBeGreaterThan(size[1]!);
   });

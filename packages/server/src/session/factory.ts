@@ -32,9 +32,9 @@ import type { DownloadStore } from '../downloads/download-store.js';
 import type { HookRegistry } from '../hooks/dispatch.js';
 import type { SessionStartedEvent } from '../hooks/types.js';
 import type { RouterWiring } from '../lifecycle/wiring.js';
+import { clientHintsFor, withoutHeadless } from './client-hints.js';
 import { ManagedSession } from './managed-session.js';
 import type { ManagedSessionFactory, ManagedSessionFactoryContext } from './registry.js';
-import { clientHintsFor, withoutHeadless } from './client-hints.js';
 
 /**
  * Turns the `{name, level, version}` metadata that DID cross the process
@@ -177,11 +177,17 @@ function resolveClientHintsHook(spec: BrowserSpec): StealthProfileHooks | null {
     return {
       initScripts: [],
       onTargetAttached: async (ctx) => {
-        const v = (await ctx.send('Browser.getVersion')) as { product?: string; userAgent?: string };
+        const v = (await ctx.send('Browser.getVersion')) as {
+          product?: string;
+          userAgent?: string;
+        };
         if (!v.userAgent) return;
         const userAgent = withoutHeadless(v.userAgent);
         const fullVersion = /\/([\d.]+)/.exec(v.product ?? '')?.[1] ?? '';
-        await ctx.send('Emulation.setUserAgentOverride', { userAgent, userAgentMetadata: clientHintsFor(userAgent, fullVersion) });
+        await ctx.send('Emulation.setUserAgentOverride', {
+          userAgent,
+          userAgentMetadata: clientHintsFor(userAgent, fullVersion),
+        });
       },
     };
   }
@@ -194,7 +200,10 @@ function resolveClientHintsHook(spec: BrowserSpec): StealthProfileHooks | null {
       let userAgentMetadata = toUserAgentMetadata(spec.clientHints);
       if (!userAgentMetadata) {
         const v = (await ctx.send('Browser.getVersion').catch(() => ({}))) as { product?: string };
-        userAgentMetadata = clientHintsFor(userAgent, /\/([\d.]+)/.exec(v.product ?? '')?.[1] ?? '');
+        userAgentMetadata = clientHintsFor(
+          userAgent,
+          /\/([\d.]+)/.exec(v.product ?? '')?.[1] ?? '',
+        );
       }
       await ctx.send('Emulation.setUserAgentOverride', { userAgent, userAgentMetadata });
     },

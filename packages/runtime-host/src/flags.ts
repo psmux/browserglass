@@ -279,7 +279,10 @@ export interface BuildLaunchArgsOptions {
  * minor version frozen at `0.0.0`, so the major version is all it takes; the value is what this exact build
  * sends headful, not an invented one. Returns null when the version cannot be read.
  */
-export function headfulUserAgent(version: string | undefined, platform: NodeJS.Platform = process.platform): string | null {
+export function headfulUserAgent(
+  version: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
   const major = /^(\d+)\./.exec(version ?? '')?.[1];
   if (!major) return null;
   const os =
@@ -324,8 +327,16 @@ export interface BuiltLaunchArgs {
  * default.
  */
 export function buildLaunchArgs(opts: BuildLaunchArgsOptions): BuiltLaunchArgs {
-  const { spec, profilePath, profileMode, allowNoSandbox, disableGpu, displayName, stealthArgs, browserVersion } =
-    opts;
+  const {
+    spec,
+    profilePath,
+    profileMode,
+    allowNoSandbox,
+    disableGpu,
+    displayName,
+    stealthArgs,
+    browserVersion,
+  } = opts;
   const args: string[] = [
     `--user-data-dir=${profilePath}`,
     '--remote-debugging-port=0',

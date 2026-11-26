@@ -14,7 +14,11 @@ import { arch, release } from 'node:os';
  * GenerateBrandVersionList): a made up "Not A Brand" entry whose spelling, version and place all follow from the
  * major version, then Chromium and the product brand.
  */
-export function brandList(major: number, brand = 'Google Chrome', full?: string): { brand: string; version: string }[] {
+export function brandList(
+  major: number,
+  brand = 'Google Chrome',
+  full?: string,
+): { brand: string; version: string }[] {
   const orders = [
     [0, 1, 2],
     [0, 2, 1],
@@ -28,7 +32,10 @@ export function brandList(major: number, brand = 'Google Chrome', full?: string)
   const grease = ['8', '99', '24'][major % 3]!;
   // With `full`, the shape of fullVersionList: every version in four parts.
   const list: { brand: string; version: string }[] = [];
-  list[order[0]] = { brand: `Not${chars[major % 11]}A${chars[(major + 1) % 11]}Brand`, version: full ? `${grease}.0.0.0` : grease };
+  list[order[0]] = {
+    brand: `Not${chars[major % 11]}A${chars[(major + 1) % 11]}Brand`,
+    version: full ? `${grease}.0.0.0` : grease,
+  };
   list[order[1]] = { brand: 'Chromium', version: full ?? String(major) };
   list[order[2]] = { brand, version: full ?? String(major) };
   return list;
@@ -38,7 +45,10 @@ export function brandList(major: number, brand = 'Google Chrome', full?: string)
  * The platform version Chrome reports for the machine this process runs on: on Windows the Universal API
  * contract version Microsoft maps each Windows build to, on macOS the macOS version, on Linux the kernel version.
  */
-export function hostPlatformVersion(platform: NodeJS.Platform = process.platform, rel: string = release()): string {
+export function hostPlatformVersion(
+  platform: NodeJS.Platform = process.platform,
+  rel: string = release(),
+): string {
   if (platform === 'win32') {
     const build = Number(rel.split('.')[2] ?? 0);
     if (build >= 26100) return '19.0.0';
@@ -87,7 +97,8 @@ export function clientHintsFor(userAgent: string, fullVersion: string): Record<s
     platformVersion: local ? hostPlatformVersion() : '',
     architecture: local ? (arch() === 'arm64' ? 'arm' : 'x86') : '',
     bitness: local ? '64' : '',
-    model: platform === 'Android' ? (/Android[^;]*;\s*([^;)]+)/.exec(userAgent)?.[1]?.trim() ?? '') : '',
+    model:
+      platform === 'Android' ? (/Android[^;]*;\s*([^;)]+)/.exec(userAgent)?.[1]?.trim() ?? '') : '',
     mobile,
     wow64: false,
     formFactors: [mobile ? 'Mobile' : 'Desktop'],
