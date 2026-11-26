@@ -412,6 +412,29 @@ describe('headless launches look like a headful Chrome of the same build', () =>
   });
 });
 
+describe('a fake camera and microphone are allowed for call tests', () => {
+  it('passes the two fake media switches and refuses the file capture one', () => {
+    const built = buildLaunchArgs({
+      spec: {
+        ...fixtureBrowserSpec(),
+        extraArgs: [
+          '--use-fake-device-for-media-stream',
+          '--use-fake-ui-for-media-stream',
+          '--use-file-for-fake-video-capture=C:/x.y4m',
+        ],
+      },
+      profilePath: 'p',
+      profileMode: 'ephemeral',
+      allowNoSandbox: false,
+    });
+    expect(built.args).toContain('--use-fake-device-for-media-stream');
+    expect(built.args).toContain('--use-fake-ui-for-media-stream');
+    expect(built.deniedExtraArgs.map((d) => d.arg)).toEqual([
+      '--use-file-for-fake-video-capture=C:/x.y4m',
+    ]);
+  });
+});
+
 describe('BrowserSpec.userAgent reaches the command line', () => {
   // Regression guard. This field was accepted by the API, persisted, read
   // back, and compared for instance reuse, and then never emitted by this
