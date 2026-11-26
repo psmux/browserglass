@@ -378,6 +378,7 @@ export class HostRuntime implements BrowserRuntime {
       allowNoSandbox: resolveAllowNoSandbox(this.config),
       disableGpu: this.gpuInitFailureSeen,
       stealthArgs: stealthProfile?.launchArgs(req.spec) ?? [],
+      browserVersion: resolved.version,
     });
     if (stealthProfile && deniedStealthArgs.length > 0) {
       // A registered profile's own args, not app-supplied `extraArgs`: see

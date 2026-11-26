@@ -258,6 +258,30 @@ export interface BuildLaunchArgsOptions {
    * and this is that exemption not existing.
    */
   stealthArgs?: readonly string[];
+  /**
+   * The resolved Chrome binary's version (`ResolvedBinary.version`). A headless launch uses it to send the
+   * user agent a headful window of the same build sends (see `headfulUserAgent`). Omitted: no such flag.
+   */
+  browserVersion?: string;
+}
+
+/**
+ * The user agent string a headful Chrome of this major version sends on this platform. Headless Chrome sends the
+ * same string with `HeadlessChrome/` in place of `Chrome/`, the most checked automation tell there is, and its
+ * `navigator.appVersion` repeats it. Chrome's reduced user agent has one fixed shape per desktop platform with the
+ * minor version frozen at `0.0.0`, so the major version is all it takes; the value is what this exact build
+ * sends headful, not an invented one. Returns null when the version cannot be read.
+ */
+export function headfulUserAgent(version: string | undefined, platform: NodeJS.Platform = process.platform): string | null {
+  const major = /^(\d+)\./.exec(version ?? '')?.[1];
+  if (!major) return null;
+  const os =
+    platform === 'win32'
+      ? 'Windows NT 10.0; Win64; x64'
+      : platform === 'darwin'
+        ? 'Macintosh; Intel Mac OS X 10_15_7'
+        : 'X11; Linux x86_64';
+  return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
 }
 
 /** One denied `extraArgs` entry, reported so the caller can build `E_ARG_DENIED`. */
@@ -293,7 +317,7 @@ export interface BuiltLaunchArgs {
  * default.
  */
 export function buildLaunchArgs(opts: BuildLaunchArgsOptions): BuiltLaunchArgs {
-  const { spec, profilePath, profileMode, allowNoSandbox, disableGpu, displayName, stealthArgs } =
+  const { spec, profilePath, profileMode, allowNoSandbox, disableGpu, displayName, stealthArgs, browserVersion } =
     opts;
   const args: string[] = [
     `--user-data-dir=${profilePath}`,
@@ -307,9 +331,18 @@ export function buildLaunchArgs(opts: BuildLaunchArgsOptions): BuiltLaunchArgs {
 
   // Headless needs this too: without it headless Chrome opens every window at
   // its own 780x580 default and the spec viewport is silently ignored.
-  args.push(
-    `--window-size=${spec.window?.width ?? spec.viewport.width},${spec.window?.height ?? spec.viewport.height}`,
-  );
+  const winW = spec.window?.width ?? spec.viewport.width;
+  const winH = spec.window?.height ?? spec.viewport.height;
+  args.push(`--window-size=${winW},${winH}`);
+
+  // Headless Chrome reports an 800 by 600 screen whatever the window size, so a 1366 by 768 page sits on a
+  // screen smaller than itself: a tell no real desktop shows. Give it a common desktop screen that holds the
+  // window, plus room for the taskbar a real screen has. Headful windows report the real monitor.
+  if (spec.headless === 'new') {
+    const screenW = Math.max(1920, winW);
+    const screenH = Math.max(1080, winH + 120);
+    args.push(`--screen-info={${screenW}x${screenH}}`);
+  }
 
   if (spec.headless !== 'new') {
     // Window position only means something for a headful window.
@@ -376,6 +409,13 @@ export function buildLaunchArgs(opts: BuildLaunchArgsOptions): BuiltLaunchArgs {
   // `StealthProfileHooks.onTargetAttached` slot that file's
   // `resolveStealthHooks` already fills. See `docs/cdp-and-interception.md`.
   if (spec.userAgent) args.push(`--user-agent=${spec.userAgent}`);
+  // Headless with no user agent asked for: send the one this build sends headful (see `headfulUserAgent`).
+  // A launch flag rather than a CDP override for the same reason as above, and because Chrome keeps building
+  // `navigator.userAgentData` from its own brand list, so the client hints stay what a real Chrome reports.
+  else if (spec.headless === 'new') {
+    const ua = headfulUserAgent(browserVersion);
+    if (ua) args.push(`--user-agent=${ua}`);
+  }
 
   // This also does NOT cover `spec.initScripts`, and never will from this
   // function: unlike `userAgent`, there is no Chrome launch flag for
