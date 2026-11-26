@@ -235,6 +235,13 @@ function platformSpecificFlags(): string[] {
   return flags;
 }
 
+/** What Chrome's window frame adds around the page on this platform: borders, tab strip and toolbar. */
+function headfulFrame(platform: NodeJS.Platform = process.platform): { w: number; h: number } {
+  if (platform === 'win32') return { w: 16, h: 87 };
+  if (platform === 'darwin') return { w: 0, h: 79 };
+  return { w: 0, h: 85 };
+}
+
 /** Options `buildLaunchArgs` needs beyond the resolved `BrowserSpec`. */
 export interface BuildLaunchArgsOptions {
   spec: BrowserSpec;
@@ -331,8 +338,13 @@ export function buildLaunchArgs(opts: BuildLaunchArgsOptions): BuiltLaunchArgs {
 
   // Headless needs this too: without it headless Chrome opens every window at
   // its own 780x580 default and the spec viewport is silently ignored.
-  const winW = spec.window?.width ?? spec.viewport.width;
-  const winH = spec.window?.height ?? spec.viewport.height;
+  // A headful window with no size of its own holds the viewport plus Chrome's frame (tab strip, toolbar,
+  // borders). Sized to the viewport itself, the window came out 1367 by 770 around a 1366 by 768 page, a
+  // window with no room for a toolbar, which a page can read from outerWidth and outerHeight. Headless has no
+  // frame, so there the two are equal, as in any headless Chrome.
+  const frame = spec.headless === 'new' || spec.window ? { w: 0, h: 0 } : headfulFrame();
+  const winW = (spec.window?.width ?? spec.viewport.width) + frame.w;
+  const winH = (spec.window?.height ?? spec.viewport.height) + frame.h;
   args.push(`--window-size=${winW},${winH}`);
 
   // Headless Chrome reports an 800 by 600 screen whatever the window size, so a 1366 by 768 page sits on a

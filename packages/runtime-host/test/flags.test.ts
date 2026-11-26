@@ -364,6 +364,18 @@ describe('headless launches look like a headful Chrome of the same build', () =>
     expect(built.args.filter((a) => a.startsWith('--user-agent'))).toEqual(['--user-agent=TestAgent/1.0']);
   });
 
+  it('makes a headful window big enough for the page and the frame around it', () => {
+    const built = buildLaunchArgs({
+      spec: fixtureBrowserSpec({ headless: 'off', viewport: { width: 1366, height: 768, deviceScaleFactor: 1 }, window: null }),
+      profilePath: 'p',
+      profileMode: 'persistent',
+      allowNoSandbox: false,
+    });
+    const [w, h] = built.args.find((a) => a.startsWith('--window-size='))!.slice('--window-size='.length).split(',').map(Number);
+    expect(w).toBeGreaterThanOrEqual(1366);
+    expect(h).toBeGreaterThan(768 + 60);
+  });
+
   it('gives a headless window a screen bigger than itself', () => {
     const built = buildLaunchArgs({
       spec: fixtureBrowserSpec({ headless: 'new' }),
