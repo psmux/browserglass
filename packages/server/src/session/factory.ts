@@ -169,7 +169,19 @@ function toUserAgentMetadata(
  * once at launch, so this repeats it, idempotently, on every subsequent
  * target that browser-level, one-shot call could never have reached.
  */
-function resolveClientHintsHook(spec: BrowserSpec): StealthProfileHooks | null {
+function resolveClientHintsHook(
+  spec: BrowserSpec,
+  // A browser level CDP call: `Browser.getVersion` is not served on a page's own session.
+  browserSend?: (method: string) => Promise<unknown>,
+): StealthProfileHooks | null {
+  const version = async (ctx: { send: (m: string) => Promise<unknown> }) =>
+    ((await (browserSend
+      ? browserSend('Browser.getVersion')
+      : ctx.send('Browser.getVersion')
+    ).catch(() => ctx.send('Browser.getVersion'))) ?? {}) as {
+      product?: string;
+      userAgent?: string;
+    };
   if (spec.userAgent === null) {
     // Headless with no agent asked for: runtime-host launched it with the headful agent (`--user-agent`), and
     // that switch leaves the high entropy hints empty, so every page gets the hints a headful window reports.
@@ -177,10 +189,7 @@ function resolveClientHintsHook(spec: BrowserSpec): StealthProfileHooks | null {
     return {
       initScripts: [],
       onTargetAttached: async (ctx) => {
-        const v = (await ctx.send('Browser.getVersion')) as {
-          product?: string;
-          userAgent?: string;
-        };
+        const v = await version(ctx);
         if (!v.userAgent) return;
         const userAgent = withoutHeadless(v.userAgent);
         const fullVersion = /\/([\d.]+)/.exec(v.product ?? '')?.[1] ?? '';
@@ -199,7 +208,7 @@ function resolveClientHintsHook(spec: BrowserSpec): StealthProfileHooks | null {
       // hints that agree with its agent string.
       let userAgentMetadata = toUserAgentMetadata(spec.clientHints);
       if (!userAgentMetadata) {
-        const v = (await ctx.send('Browser.getVersion').catch(() => ({}))) as { product?: string };
+        const v = await version(ctx).catch(() => ({}) as { product?: string });
         userAgentMetadata = clientHintsFor(
           userAgent,
           /\/([\d.]+)/.exec(v.product ?? '')?.[1] ?? '',
@@ -520,7 +529,7 @@ export function createManagedSessionFactory(
       composeTargetAttachedHooks(
         composeTargetAttachedHooks(
           resolveViewportHook(view.instance.spec, view.instance.runtime?.kind),
-          resolveClientHintsHook(view.instance.spec),
+          resolveClientHintsHook(view.instance.spec, (m) => bridge.send(m)),
         ),
         resolveStealthHooks(
           view.instance.runtime?.stealthProfile,
@@ -709,7 +718,7 @@ function buildRestartInstanceExecutor(
         composeTargetAttachedHooks(
           composeTargetAttachedHooks(
             resolveViewportHook(view.instance.spec, view.instance.runtime?.kind),
-            resolveClientHintsHook(view.instance.spec),
+            resolveClientHintsHook(view.instance.spec, (m) => bridge.send(m)),
           ),
           resolveStealthHooks(
             view.instance.runtime?.stealthProfile,
