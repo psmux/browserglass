@@ -61,11 +61,19 @@ describe('DownloadStore.finalize', () => {
     );
   });
 
-  it('refuses a symlink planted at the expected path (belt and braces)', async () => {
+  it('refuses a symlink planted at the expected path (belt and braces)', async (ctx) => {
     const real = join(root, '..', 'planted-secret.bin');
     await writeFile(real, 'secret');
     const linkPath = join(root, 'g1');
-    await symlink(real, linkPath);
+    try {
+      await symlink(real, linkPath);
+    } catch (err) {
+      // Windows lets only an administrator or Developer Mode create a symlink. Where nobody can plant one,
+      // there is nothing to refuse; the test runs wherever a symlink can exist.
+      await rm(real, { force: true });
+      if ((err as NodeJS.ErrnoException).code === 'EPERM') return ctx.skip();
+      throw err;
+    }
     await expect(store.finalize('g1', linkPath)).rejects.toThrow(DownloadStoreError);
     await rm(real, { force: true });
   });
