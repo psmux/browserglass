@@ -35,6 +35,9 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
+    // Seeded Chrome profiles and a cleaned temp folder: see test/support/seeded-chrome.ts.
+    globalSetup: ['./test/support/seeded-chrome.ts'],
+    setupFiles: ['./test/support/seeded-chrome.setup.ts'],
     testTimeout: 20_000,
   },
 });

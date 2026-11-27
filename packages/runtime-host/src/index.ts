@@ -41,6 +41,20 @@ export { runStealthSelfTest } from './stealth-self-test.js';
 export type { RunStealthSelfTestOptions, StealthSelfTestReport } from './stealth-self-test.js';
 
 export { spawnDetachedChrome, resolveBrowserPid, killProcessTree } from './spawn.js';
+export {
+  localStateSeedPath,
+  hasPasswordCheckAnswer,
+  isTrustedSeed,
+  readTrustedSeed,
+  profileHasPasswordCheckAnswer,
+  seedProfileLocalState,
+  prepareLocalState,
+  runsPasswordCheck,
+  userDataDirFromArgs,
+  seedRequired,
+  UnseededProfileError,
+} from './local-state-seed.js';
+export type { SeedOutcome, PrepareLocalStateOptions } from './local-state-seed.js';
 export type { SpawnDetachedOptions, SpawnedChrome } from './spawn.js';
 
 export {

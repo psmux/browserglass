@@ -45,6 +45,9 @@ import { type BrowserGlass, createBrowserGlass } from '../../src/index.js';
  * cannot depend on its `test/**` (nothing outside that package can).
  */
 function shortTempRoot(prefix: string): string {
+  // The run folder the shared test setup made (short on Windows), removed when the run ends.
+  const runRoot = process.env['BGLS_TEST_TMP'];
+  if (runRoot) return mkdtempSync(join(runRoot, prefix));
   if (process.platform === 'win32') {
     const base = join(process.env['SystemDrive'] ?? 'C:', 'bglstmp');
     mkdirSync(base, { recursive: true });

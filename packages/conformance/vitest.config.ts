@@ -26,6 +26,10 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     environment: 'node',
+    // Every real Chrome here starts on a seeded profile, and the run's temp
+    // folder is removed at the end: see runtime-host/test/support/seeded-chrome.ts.
+    globalSetup: ['../runtime-host/test/support/seeded-chrome.ts'],
+    setupFiles: ['../runtime-host/test/support/seeded-chrome.setup.ts'],
     // `better-sqlite3` is a native addon (a `.node` binary) that Vite
     // cannot transform. It reaches this package through
     // `@browserglass/store-sqlite`, and pnpm's strict layout keeps it in

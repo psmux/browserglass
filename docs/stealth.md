@@ -55,6 +55,18 @@ Every browser launched by BrowserGlass gets these, regardless of stealth setting
 
 **`Runtime.enable` is sent from one place.** The only module that sends `Runtime.enable` is `packages/core/src/diagnostics/target-diagnostics.ts:399`, verified by grepping the entire build. That call is conditional: it happens only when a viewer subscribes to console or error diagnostics. This is load-bearing for the stealth story below.
 
+**On Windows the profile gets a Local State seed before Chrome starts.** See "Failed Windows logons" below.
+
+### Failed Windows logons
+
+Chrome on Windows checks at startup whether the signed in user's password is blank. It does that by calling LogonUser with an empty password, and each call is one failed logon for the account (Security event 4625, from chrome.exe). Chrome skips the check when the profile's `Local State` already holds an earlier answer. A fresh BrowserGlass profile has no `Local State`, so every start of the installed Chrome on one cost a failed logon. Ten in ten minutes is a common lockout policy, and one run of the runtime-host and conformance suites on a Windows test box locked its account for ten minutes, SSH included.
+
+Writing only the answer keys does not work; Chrome asked again in testing. A whole `Local State` that Chrome wrote itself, after answering and after fetching its variations, is trusted. So each machine keeps one as its seed at `~/.browserglass/local-state-seed.json` (or `BGLS_LOCAL_STATE_SEED`), the same file GlassQA uses. `spawnDetachedChrome` copies it into the profile, or merges its answer into the `Local State` that is there, right before every Chrome start (`packages/runtime-host/src/local-state-seed.ts`). `BGLS_SEED_LOCAL_STATE=0` turns that off. The runtime never makes a seed on its own, because making one costs the very logon it saves.
+
+The test suites that start Chrome (runtime-host, conformance, server) share one setup, `packages/runtime-host/test/support/seeded-chrome.ts`. On a Windows machine with no seed it makes one, once, with a single headless Chrome; that start is the one failed logon the machine pays. It points the temp folder of every test worker at one run folder and removes it, with any Chrome still running under it, when the run ends. Under the test runner, or with `BGLS_REQUIRE_SEEDED_PROFILE=1`, a Windows Chrome start on a profile that still has no answer throws `UnseededProfileError` instead of costing a logon.
+
+Measured on 2026-11-27 with the account's bad password count (`net user <name>`, or ADSI `BadPasswordAttempts`), read before and after a full `pnpm install && build && lint && typecheck && pnpm -r test` and every 20 seconds during it. On two Windows test machines it was 0 before, 0 after and never rose during the run. Before this change the same suites locked one of those accounts. The run folder was gone afterwards and no new profile was left in either machine's temp folder.
+
 ---
 
 ## The tradeoff: console diagnostics make you visible
