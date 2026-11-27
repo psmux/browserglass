@@ -1,5 +1,48 @@
 # Stealth: what happens by default
 
+## Headless parity, measured (November 2026)
+
+Measured against public bot detection pages and a probe page of our own, on a Windows 11 machine with a discrete GPU and Google Chrome 158 installed, through BrowserGlass's own client with nothing else attached. Before is main at 30443dc; after is the `stealth/patchright` branch.
+
+What leaked: a headful BrowserGlass browser was already clean on every page. A headless one gave itself away in three ways. Its user agent and `navigator.appVersion` said `HeadlessChrome`. Its screen was Chrome's headless default of 800 by 600 under a 1366 by 768 page. And a spec that set `userAgent` without `clientHints` emptied `navigator.userAgentData`, because the override went out without metadata. A headful window was also sized to the viewport itself, so `outerWidth` was 1367 around a 1366 page: a window with no room for a toolbar.
+
+What changed:
+
+* `runtime-host/src/flags.ts`: a headless launch with no `userAgent` in its spec sends the user agent a headful Chrome of the same build sends (`headfulUserAgent`, from the resolved binary's version; Chrome's reduced agent has one fixed shape per desktop platform), and gets `--screen-info` with a common desktop screen that holds the window. A headful window with no size of its own holds the viewport plus Chrome's frame.
+* `server/src/session/client-hints.ts` and the client hints hook in `factory.ts`: with `--user-agent` set, headless Chrome leaves the high entropy hints empty, so every page gets client hints that agree with the agent, built the way Chromium builds its brand list (the "Not A Brand" entry's spelling, version and place follow from the major version). The Chrome version comes from `Browser.getVersion` on the browser session. A spec with `userAgent` and no `clientHints` gets the same instead of an empty `userAgentData`. After the change the headless hints match a plain headful Chrome on the same machine field for field.
+* `protocol/src/domain/arg-lists.ts`: `--use-fake-device-for-media-stream` and `--use-fake-ui-for-media-stream` are allowed in `extraArgs`, for tests that need a camera and microphone (a call between two browsers). Fake devices are visible by their labels, so a run that must look like a person grants a real device instead. `--use-file-for-fake-video-capture` stays refused: it reads a file off the host.
+
+Scores (tells on the probe page; rebrowser bot-detector red and yellow tests; sannysoft rows failed; CreepJS headless, like headless and stealth percentages; BrowserScan's verdict; pixelscan items detected; fingerprint-scan.com bot score; deviceandbrowserinfo verdict; incolumitas FAIL count):
+
+Before:
+
+| mode | tells | rebrowser | sannysoft | creepjs | browserscan | pixelscan | fpscan | dabi | incolumitas |
+|---|---|---|---|---|---|---|---|---|---|
+| headed | 0 | 0 red, 0 yellow | 0 failed | 0% headless, 25% like, 0% stealth | Normal | 0 detected | 41/100 | human | 1 FAIL (WEBDRIVER) |
+| headless | 3 | 2 red, 1 yellow (HeadlessChrome, headless) | 3 failed | 67% headless, 25% like, 0% stealth | Robot | 3 detected (Webdriver, HeadlessChrome, AdvancedBotDetection) | 100/100 | bot (hasBotUserAgent) | 4 FAIL (userAgent, HEADCHR_UA, WEBDRIVER, CHR_MEMORY) |
+
+After:
+
+| mode | tells | rebrowser | sannysoft | creepjs | browserscan | pixelscan | fpscan | dabi | incolumitas |
+|---|---|---|---|---|---|---|---|---|---|
+| headed | 0 | 0 red, 0 yellow | 0 failed | 0% headless, 25% like, 0% stealth | Normal | 0 detected | 41/100 | human | 1 FAIL (WEBDRIVER) |
+| headless | 0 | 0 red, 0 yellow | 0 failed | 0% headless, 25% like, 0% stealth | Normal | 0 detected | 41/100 | human | 1 FAIL (WEBDRIVER) |
+
+fingerprint-scan.com weighs the network and the address, which no browser change touches, so it stays where the headful run already was. incolumitas' `WEBDRIVER` test reads whether `navigator.webdriver` exists, which it does in every Chrome.
+
+rebrowser bot-detector, headless, before and after:
+
+![rebrowser before](media/stealth/before-headless-rebrowser.png)
+![rebrowser after](media/stealth/after-headless-rebrowser.png)
+
+sannysoft, headless, before and after:
+
+![sannysoft before](media/stealth/before-headless-sannysoft.png)
+![sannysoft after](media/stealth/after-headless-sannysoft.png)
+
+What a driver on top can still give away: a client that turns on the Runtime domain (console diagnostics here, or a Playwright attach) shows up on rebrowser's `runtimeEnableLeak` and on pixelscan's CDP check, and a driver that evaluates with `userGesture: true` gives the page a user activation with no input behind it. The sections below on console diagnostics still apply. The headless window has no frame, so `outerWidth` equals `innerWidth`, as in any headless Chrome.
+
+
 BrowserGlass does specific, measured things to reduce automation signals. This page is what, how it was verified, and what it deliberately does not do.
 
 ## What happens at every launch
@@ -8,7 +51,7 @@ Every browser launched by BrowserGlass gets these, regardless of stealth setting
 
 **`--disable-blink-features=AutomationControlled`.** This is Blink's own automation suppression flag, passed at every level. It stops the browser from emitting certain signals that a page can read; most notably, the value of `navigator.webdriver` becomes `false` (on real, non-automated Chrome it is `false` too). See `packages/runtime-host/src/flags.ts:205`.
 
-**Evaluate runs in isolated worlds.** Every `Page.createIsolatedWorld` call that the evaluation surface makes means code runs in a separate context from the page's own scripts. The page cannot eavesdrop on what is being evaluated or patch the globals we see. See `packages/automation/src/client/AutomationClient.ts` for the evaluation surface.
+**Evaluate can run in an isolated world.** `evaluateWith(script, args, { world: 'isolated' })` runs in a private world that shares the DOM and nothing else, so the page cannot see the script, hook what it calls or read what it leaves behind. The default is still `'main'`, for callers that read page globals; a caller that must not be seen passes `'isolated'`. See `EvaluateOptions.world` in `packages/automation/src/types.ts`.
 
 **`Runtime.enable` is sent from one place.** The only module that sends `Runtime.enable` is `packages/core/src/diagnostics/target-diagnostics.ts:399`, verified by grepping the entire build. That call is conditional: it happens only when a viewer subscribes to console or error diagnostics. This is load-bearing for the stealth story below.
 

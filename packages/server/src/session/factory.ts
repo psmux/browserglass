@@ -32,6 +32,7 @@ import type { DownloadStore } from '../downloads/download-store.js';
 import type { HookRegistry } from '../hooks/dispatch.js';
 import type { SessionStartedEvent } from '../hooks/types.js';
 import type { RouterWiring } from '../lifecycle/wiring.js';
+import { clientHintsFor, withoutHeadless } from './client-hints.js';
 import { ManagedSession } from './managed-session.js';
 import type { ManagedSessionFactory, ManagedSessionFactoryContext } from './registry.js';
 
@@ -168,18 +169,52 @@ function toUserAgentMetadata(
  * once at launch, so this repeats it, idempotently, on every subsequent
  * target that browser-level, one-shot call could never have reached.
  */
-function resolveClientHintsHook(spec: BrowserSpec): StealthProfileHooks | null {
+function resolveClientHintsHook(
+  spec: BrowserSpec,
+  // A browser level CDP call: `Browser.getVersion` is not served on a page's own session.
+  browserSend?: (method: string) => Promise<unknown>,
+): StealthProfileHooks | null {
+  const version = async (ctx: { send: (m: string) => Promise<unknown> }) =>
+    ((await (browserSend
+      ? browserSend('Browser.getVersion')
+      : ctx.send('Browser.getVersion')
+    ).catch(() => ctx.send('Browser.getVersion'))) ?? {}) as {
+      product?: string;
+      userAgent?: string;
+    };
   if (spec.userAgent === null) {
-    return null;
+    // Headless with no agent asked for: runtime-host launched it with the headful agent (`--user-agent`), and
+    // that switch leaves the high entropy hints empty, so every page gets the hints a headful window reports.
+    if (spec.headless !== 'new') return null;
+    return {
+      initScripts: [],
+      onTargetAttached: async (ctx) => {
+        const v = await version(ctx);
+        if (!v.userAgent) return;
+        const userAgent = withoutHeadless(v.userAgent);
+        const fullVersion = /\/([\d.]+)/.exec(v.product ?? '')?.[1] ?? '';
+        await ctx.send('Emulation.setUserAgentOverride', {
+          userAgent,
+          userAgentMetadata: clientHintsFor(userAgent, fullVersion),
+        });
+      },
+    };
   }
   const userAgent = spec.userAgent;
   return {
     initScripts: [],
     onTargetAttached: async (ctx) => {
-      await ctx.send('Emulation.setUserAgentOverride', {
-        userAgent,
-        userAgentMetadata: toUserAgentMetadata(spec.clientHints),
-      });
+      // An override without metadata would empty navigator.userAgentData, so a spec with no clientHints gets
+      // hints that agree with its agent string.
+      let userAgentMetadata = toUserAgentMetadata(spec.clientHints);
+      if (!userAgentMetadata) {
+        const v = await version(ctx).catch(() => ({}) as { product?: string });
+        userAgentMetadata = clientHintsFor(
+          userAgent,
+          /\/([\d.]+)/.exec(v.product ?? '')?.[1] ?? '',
+        );
+      }
+      await ctx.send('Emulation.setUserAgentOverride', { userAgent, userAgentMetadata });
     },
   };
 }
@@ -494,7 +529,7 @@ export function createManagedSessionFactory(
       composeTargetAttachedHooks(
         composeTargetAttachedHooks(
           resolveViewportHook(view.instance.spec, view.instance.runtime?.kind),
-          resolveClientHintsHook(view.instance.spec),
+          resolveClientHintsHook(view.instance.spec, (m) => bridge.send(m)),
         ),
         resolveStealthHooks(
           view.instance.runtime?.stealthProfile,
@@ -683,7 +718,7 @@ function buildRestartInstanceExecutor(
         composeTargetAttachedHooks(
           composeTargetAttachedHooks(
             resolveViewportHook(view.instance.spec, view.instance.runtime?.kind),
-            resolveClientHintsHook(view.instance.spec),
+            resolveClientHintsHook(view.instance.spec, (m) => bridge.send(m)),
           ),
           resolveStealthHooks(
             view.instance.runtime?.stealthProfile,
