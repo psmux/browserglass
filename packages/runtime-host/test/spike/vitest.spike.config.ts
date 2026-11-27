@@ -13,6 +13,8 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   test: {
+    globalSetup: ['./test/support/seeded-chrome.ts'],
+    setupFiles: ['./test/support/seeded-chrome.setup.ts'],
     include: ['test/spike/spike-*.ts'],
     testTimeout: 300_000,
     hookTimeout: 60_000,

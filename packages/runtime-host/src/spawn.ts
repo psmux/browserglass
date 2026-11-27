@@ -8,6 +8,7 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process';
 import { platform } from 'node:os';
 import { promisify } from 'node:util';
+import { prepareLocalState } from './local-state-seed.js';
 import { chromeProcsForDataDirAsync } from './process-table.js';
 
 const execFileAsync = promisify(execFile);
@@ -34,8 +35,15 @@ export interface SpawnedChrome {
  * discarded (Chrome does not use stdout for anything BrowserGlass reads).
  * `detached: true` gives the child its own process group on POSIX, which
  * is what makes `process.kill(-pgid, sig)` reach the whole tree later.
+ *
+ * Every Chrome start goes through here, so this is where the profile gets
+ * the machine's Local State seed first (see `local-state-seed.ts`): on
+ * Windows a fresh profile otherwise costs one failed logon per start.
+ * Under a test runner an unseeded Windows start throws
+ * `UnseededProfileError` before anything is spawned.
  */
 export function spawnDetachedChrome(opts: SpawnDetachedOptions): SpawnedChrome {
+  prepareLocalState(opts.binaryPath, opts.args);
   const child = spawn(opts.binaryPath, opts.args, {
     detached: true,
     stdio: ['ignore', 'ignore', 'pipe'],

@@ -6,7 +6,7 @@
  * force-kills anything a failed assertion left behind), so this machine
  * never keeps a test-launched Chrome window after this suite finishes.
  */
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CDP_MIN_MAJOR_DEFAULT } from '@browserglass/core';
@@ -35,14 +35,30 @@ afterEach(async () => {
 afterAll(() => {
   killEverythingTracked();
   const survivors = assertNoTrackedChromeProcessesRemain();
+  // Every profile this file made goes with it, even when the shared run
+  // folder (test/support/seeded-chrome.ts) is not in use.
+  for (const dir of workDirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   if (survivors.length > 0) {
     throw new Error(`chrome processes survived test cleanup: ${survivors.join(', ')}`);
   }
 });
 
+const workDirs: string[] = [];
+
 function freshWorkspace(): { stateDir: string; profileRoot: string } {
   const base = mkdtempSync(join(tmpdir(), 'bgls-runtime-host-e2e-'));
+  workDirs.push(base);
   return { stateDir: join(base, 'state'), profileRoot: join(base, 'profiles') };
+}
+
+let loose: string | undefined;
+/** A profile root for tests that need no runtime workspace of their own. These used to sit straight in the OS temp folder and were never removed. */
+function looseProfileRoot(): string {
+  if (!loose) {
+    loose = mkdtempSync(join(tmpdir(), 'bgls-runtime-host-e2e-loose-'));
+    workDirs.push(loose);
+  }
+  return loose;
 }
 
 function fixtureProfile(profileRoot: string, profileId: string): MaterialisedProfile {
@@ -124,9 +140,11 @@ describe('HostRuntime.launch, real Chrome', () => {
   }, 60_000);
 
   it('launch() is idempotent per instanceId: a second call while the first is live returns the same handle', async () => {
-    const { runtime } = await createHostRuntime({ nodeId: 'nod_test', ...freshWorkspace() });
+    const { profileRoot, ...rest } = freshWorkspace();
+    const { runtime } = await createHostRuntime({ nodeId: 'nod_test', profileRoot, ...rest });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(tmpdir());
+    // Under this test's own workspace, never straight in the OS temp folder.
+    const req = fixtureLaunchRequest(profileRoot);
     const [a, b] = await Promise.all([runtime.launch(req), runtime.launch(req)]);
     expect(a.browserGuid).toBe(b.browserGuid);
     expect(a.pid).toBe(b.pid);
@@ -172,7 +190,7 @@ describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', (
       stealthProfiles: [BASIC_STEALTH_PROFILE],
     });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(tmpdir(), { spec: fixtureBrowserSpec({ stealth: 'full' }) });
+    const req = fixtureLaunchRequest(looseProfileRoot(), { spec: fixtureBrowserSpec({ stealth: 'full' }) });
 
     await expect(runtime.launch(req)).rejects.toMatchObject({ code: 'E_STEALTH_LEVEL_DISALLOWED' });
   });
@@ -186,7 +204,7 @@ describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', (
       // feature exists to make loud.
     });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(tmpdir(), { spec: fixtureBrowserSpec({ stealth: 'basic' }) });
+    const req = fixtureLaunchRequest(looseProfileRoot(), { spec: fixtureBrowserSpec({ stealth: 'basic' }) });
 
     await expect(runtime.launch(req)).rejects.toMatchObject({ code: 'E_STEALTH_PROFILE_MISSING' });
   });
@@ -225,7 +243,7 @@ describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', (
     });
     runtimesToDispose.push(runtime);
 
-    const req = fixtureLaunchRequest(tmpdir(), { spec: fixtureBrowserSpec({ stealth: 'off' }) });
+    const req = fixtureLaunchRequest(looseProfileRoot(), { spec: fixtureBrowserSpec({ stealth: 'off' }) });
     const handle = await runtime.launch(req);
 
     expect(handle.stealthProfile ?? null).toBeNull();
@@ -249,7 +267,7 @@ describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', (
     });
     runtimesToDispose.push(runtime);
 
-    const req = fixtureLaunchRequest(tmpdir(), { spec: fixtureBrowserSpec({ stealth: 'basic' }) });
+    const req = fixtureLaunchRequest(looseProfileRoot(), { spec: fixtureBrowserSpec({ stealth: 'basic' }) });
     await expect(runtime.launch(req)).rejects.toMatchObject({ code: 'E_ARG_DENIED' });
   }, 60_000);
 });
@@ -258,7 +276,7 @@ describe('HostRuntime terminate ladder, real Chrome', () => {
   it('killing the parent pid alone leaves no orphaned renderers when the process group is killed', async () => {
     const { runtime } = await createHostRuntime({ nodeId: 'nod_test', ...freshWorkspace() });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(tmpdir());
+    const req = fixtureLaunchRequest(looseProfileRoot());
     const handle = await runtime.launch(req);
 
     const beforeKill = chromeProcsForDataDir(handle.profilePath);
@@ -284,7 +302,7 @@ describe('HostRuntime terminate ladder, real Chrome', () => {
   it("'clean' attempts a CDP Browser.close before falling back, and still leaves nothing running", async () => {
     const { runtime } = await createHostRuntime({ nodeId: 'nod_test', ...freshWorkspace() });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(tmpdir());
+    const req = fixtureLaunchRequest(looseProfileRoot());
     const handle = await runtime.launch(req);
 
     await runtime.terminate(handle, 'clean');
@@ -338,7 +356,7 @@ describe('stale DevToolsActivePort does not produce a false-positive connect', (
   it('a leftover DevToolsActivePort naming the wrong port is unlinked before spawn, so discovery waits for the real one', async () => {
     const { runtime } = await createHostRuntime({ nodeId: 'nod_test', ...freshWorkspace() });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(tmpdir());
+    const req = fixtureLaunchRequest(looseProfileRoot());
 
     // Plant a stale DevToolsActivePort naming a port nothing is listening
     // on, exactly what a previous run's leftover file would look like.
@@ -359,7 +377,7 @@ describe('orphan handling on the launch path', () => {
   it('reaps a leftover orphan Chrome for a profile before relaunching onto it', async () => {
     const { runtime } = await createHostRuntime({ nodeId: 'nod_test', ...freshWorkspace() });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(tmpdir());
+    const req = fixtureLaunchRequest(looseProfileRoot());
 
     const first = await runtime.launch(req);
     // Detach: stop supervising but leave the process running, simulating
