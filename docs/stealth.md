@@ -65,7 +65,7 @@ Writing only the answer keys does not work; Chrome asked again in testing. A who
 
 The test suites that start Chrome (runtime-host, conformance, server) share one setup, `packages/runtime-host/test/support/seeded-chrome.ts`. On a Windows machine with no seed it makes one, once, with a single headless Chrome; that start is the one failed logon the machine pays. It points the temp folder of every test worker at one run folder and removes it, with any Chrome still running under it, when the run ends. Under the test runner, or with `BGLS_REQUIRE_SEEDED_PROFILE=1`, a Windows Chrome start on a profile that still has no answer throws `UnseededProfileError` instead of costing a logon.
 
-Measured with the account's bad password count (`net user <name>`, or ADSI `BadPasswordAttempts`) before and after a full `pnpm -r test`: RESULTS_PLACEHOLDER
+Measured on 2026-11-27 with the account's bad password count (`net user <name>`, or ADSI `BadPasswordAttempts`), read before and after a full `pnpm install && build && lint && typecheck && pnpm -r test` and every 20 seconds during it. On two Windows test machines it was 0 before, 0 after and never rose during the run. Before this change the same suites locked one of those accounts. The run folder was gone afterwards and no new profile was left in either machine's temp folder.
 
 ---
 
