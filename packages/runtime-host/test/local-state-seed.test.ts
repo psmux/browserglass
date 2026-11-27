@@ -30,6 +30,7 @@ const TRUSTED = {
 };
 
 let work: string;
+const seedFile = (): string => join(work, 'seed.json');
 let priorSeed: string | undefined;
 
 beforeEach(() => {
@@ -39,7 +40,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (priorSeed === undefined) delete process.env['BGLS_LOCAL_STATE_SEED'];
+  if (priorSeed === undefined) Reflect.deleteProperty(process.env, 'BGLS_LOCAL_STATE_SEED');
   else process.env['BGLS_LOCAL_STATE_SEED'] = priorSeed;
   rmSync(work, { recursive: true, force: true });
 });
@@ -56,7 +57,7 @@ const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 
 describe('seedProfileLocalState', () => {
   it('gives a fresh profile the whole seed', () => {
-    writeFileSync(process.env['BGLS_LOCAL_STATE_SEED']!, JSON.stringify(TRUSTED));
+    writeFileSync(seedFile(), JSON.stringify(TRUSTED));
     const fresh = udd('fresh');
     expect(seedProfileLocalState(fresh)).toBe('seeded');
     expect(JSON.parse(readFileSync(join(fresh, 'Local State'), 'utf8'))).toEqual(TRUSTED);
@@ -64,7 +65,7 @@ describe('seedProfileLocalState', () => {
   });
 
   it('merges the answer into a Local State without one and keeps what was there', () => {
-    writeFileSync(process.env['BGLS_LOCAL_STATE_SEED']!, JSON.stringify(TRUSTED));
+    writeFileSync(seedFile(), JSON.stringify(TRUSTED));
     const bare = udd('bare', { browser: { mine: true }, password_manager: { other: 1 } });
     expect(seedProfileLocalState(bare)).toBe('seeded');
     const s = JSON.parse(readFileSync(join(bare, 'Local State'), 'utf8'));
@@ -73,8 +74,10 @@ describe('seedProfileLocalState', () => {
   });
 
   it('leaves a profile that answers alone, and an unreadable one to Chrome', () => {
-    writeFileSync(process.env['BGLS_LOCAL_STATE_SEED']!, JSON.stringify(TRUSTED));
-    const answered = udd('answered', { password_manager: { os_password_blank: true, os_password_last_changed: '2' } });
+    writeFileSync(seedFile(), JSON.stringify(TRUSTED));
+    const answered = udd('answered', {
+      password_manager: { os_password_blank: true, os_password_last_changed: '2' },
+    });
     expect(seedProfileLocalState(answered)).toBe('had-answer');
     const broken = udd('broken');
     writeFileSync(join(broken, 'Local State'), '{not json');
@@ -82,7 +85,7 @@ describe('seedProfileLocalState', () => {
   });
 
   it('does not use a seed Chrome would not trust (no variations fetched yet)', () => {
-    writeFileSync(process.env['BGLS_LOCAL_STATE_SEED']!, JSON.stringify({ password_manager: ANSWER }));
+    writeFileSync(seedFile(), JSON.stringify({ password_manager: ANSWER }));
     const fresh = udd('fresh');
     expect(seedProfileLocalState(fresh)).toBe('no-seed');
     expect(existsSync(join(fresh, 'Local State'))).toBe(false);
@@ -95,7 +98,7 @@ describe('prepareLocalState, the guard before every Chrome start', () => {
   });
 
   it('seeds on Windows before Chrome starts', () => {
-    writeFileSync(process.env['BGLS_LOCAL_STATE_SEED']!, JSON.stringify(TRUSTED));
+    writeFileSync(seedFile(), JSON.stringify(TRUSTED));
     const fresh = udd('fresh');
     expect(prepareLocalState(CHROME, args(fresh), { platform: 'win32' })).toBe('seeded');
     expect(profileHasPasswordCheckAnswer(fresh)).toBe(true);
@@ -103,19 +106,32 @@ describe('prepareLocalState, the guard before every Chrome start', () => {
 
   it('fails loudly on Windows when the profile would start unseeded', () => {
     const fresh = udd('fresh');
-    expect(() => prepareLocalState(CHROME, args(fresh), { platform: 'win32' })).toThrow(UnseededProfileError);
-    expect(() => prepareLocalState(CHROME, ['about:blank'], { platform: 'win32' })).toThrow(UnseededProfileError);
+    expect(() => prepareLocalState(CHROME, args(fresh), { platform: 'win32' })).toThrow(
+      UnseededProfileError,
+    );
+    expect(() => prepareLocalState(CHROME, ['about:blank'], { platform: 'win32' })).toThrow(
+      UnseededProfileError,
+    );
   });
 
   it('does nothing off Windows, and nothing for the headless shell', () => {
     const fresh = udd('fresh');
-    expect(prepareLocalState('/opt/chrome/chrome', args(fresh), { platform: 'linux' })).toBe('skipped');
-    expect(prepareLocalState('C:\\pw\\chrome-headless-shell.exe', args(fresh), { platform: 'win32' })).toBe('skipped');
+    expect(prepareLocalState('/opt/chrome/chrome', args(fresh), { platform: 'linux' })).toBe(
+      'skipped',
+    );
+    expect(
+      prepareLocalState('C:\\pw\\chrome-headless-shell.exe', args(fresh), { platform: 'win32' }),
+    ).toBe('skipped');
     expect(existsSync(join(fresh, 'Local State'))).toBe(false);
   });
 
-  it.runIf(process.platform === 'win32')('spawnDetachedChrome refuses an unseeded profile before anything starts', () => {
-    const fresh = udd('fresh');
-    expect(() => spawnDetachedChrome({ binaryPath: CHROME, args: args(fresh), env: {} })).toThrow(UnseededProfileError);
-  });
+  it.runIf(process.platform === 'win32')(
+    'spawnDetachedChrome refuses an unseeded profile before anything starts',
+    () => {
+      const fresh = udd('fresh');
+      expect(() => spawnDetachedChrome({ binaryPath: CHROME, args: args(fresh), env: {} })).toThrow(
+        UnseededProfileError,
+      );
+    },
+  );
 });

@@ -57,8 +57,20 @@ declare module 'vitest' {
 function windowsChrome(): string | undefined {
   const candidates = [
     process.env['BGLS_CHROME_PATH'],
-    join(process.env['PROGRAMFILES'] ?? 'C:\\Program Files', 'Google', 'Chrome', 'Application', 'chrome.exe'),
-    join(process.env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)', 'Google', 'Chrome', 'Application', 'chrome.exe'),
+    join(
+      process.env['PROGRAMFILES'] ?? 'C:\\Program Files',
+      'Google',
+      'Chrome',
+      'Application',
+      'chrome.exe',
+    ),
+    join(
+      process.env['PROGRAMFILES(X86)'] ?? 'C:\\Program Files (x86)',
+      'Google',
+      'Chrome',
+      'Application',
+      'chrome.exe',
+    ),
     join(process.env['LOCALAPPDATA'] ?? '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
   ];
   return candidates.find((p): p is string => !!p && existsSync(p));
@@ -67,7 +79,11 @@ function windowsChrome(): string | undefined {
 function killChromeOn(udd: string): void {
   for (const p of chromeProcsForDataDir(udd)) {
     try {
-      execFileSync('taskkill', ['/T', '/F', '/PID', String(p.pid)], { stdio: 'ignore', timeout: 5000, windowsHide: true });
+      execFileSync('taskkill', ['/T', '/F', '/PID', String(p.pid)], {
+        stdio: 'ignore',
+        timeout: 5000,
+        windowsHide: true,
+      });
     } catch {
       // already gone
     }
@@ -79,19 +95,23 @@ function killChromeOn(udd: string): void {
  * when a trusted seed exists afterwards. Costs one failed logon, once per
  * machine, and only when no seed was there.
  */
-export async function ensureLocalStateSeed(log: (m: string) => void = console.warn): Promise<boolean> {
+export async function ensureLocalStateSeed(
+  log: (m: string) => void = console.warn,
+): Promise<boolean> {
   if (process.platform !== 'win32') return false;
   const seed = localStateSeedPath();
   if (readTrustedSeed()) return true;
   const lock = `${seed}.making`;
   mkdirSync(dirname(seed), { recursive: true });
   try {
-    if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > 5 * 60_000) rmSync(lock, { force: true });
+    if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs > 5 * 60_000)
+      rmSync(lock, { force: true });
     closeSync(openSync(lock, 'wx'));
   } catch {
     // Another run (or GlassQA) is making it: wait for its seed.
     const t0 = Date.now();
-    while (Date.now() - t0 < 200_000 && !readTrustedSeed()) await new Promise((r) => setTimeout(r, 2000));
+    while (Date.now() - t0 < 200_000 && !readTrustedSeed())
+      await new Promise((r) => setTimeout(r, 2000));
     return !!readTrustedSeed();
   }
   const chrome = windowsChrome();
@@ -100,17 +120,33 @@ export async function ensureLocalStateSeed(log: (m: string) => void = console.wa
   try {
     if (!chrome) return false;
     // A seed file Chrome would not trust is moved aside, not used.
-    if (existsSync(seed)) renameSync(seed, `${seed.replace(/\.json$/, '')}.untrusted-${Date.now()}.json`);
-    log(`[seeded-chrome] making the Local State seed with one Chrome on ${udd}; this one start costs one failed Windows logon, once per machine`);
-    child = spawn(chrome, ['--headless=new', `--user-data-dir=${udd}`, '--no-first-run', '--no-default-browser-check', 'about:blank'], {
-      stdio: 'ignore',
-      windowsHide: true,
-    });
+    if (existsSync(seed))
+      renameSync(seed, `${seed.replace(/\.json$/, '')}.untrusted-${Date.now()}.json`);
+    log(
+      `[seeded-chrome] making the Local State seed with one Chrome on ${udd}; this one start costs one failed Windows logon, once per machine`,
+    );
+    child = spawn(
+      chrome,
+      [
+        '--headless=new',
+        `--user-data-dir=${udd}`,
+        '--no-first-run',
+        '--no-default-browser-check',
+        'about:blank',
+      ],
+      {
+        stdio: 'ignore',
+        windowsHide: true,
+      },
+    );
     const started = Date.now();
     while (Date.now() - started < 180_000) {
       await new Promise((r) => setTimeout(r, 3000));
       try {
-        const s = JSON.parse(readFileSync(join(udd, 'Local State'), 'utf8')) as Record<string, unknown>;
+        const s = JSON.parse(readFileSync(join(udd, 'Local State'), 'utf8')) as Record<
+          string,
+          unknown
+        >;
         if (isTrustedSeed(s)) {
           writeFileSync(`${seed}.tmp`, JSON.stringify(s), 'utf8');
           renameSync(`${seed}.tmp`, seed);
@@ -123,7 +159,11 @@ export async function ensureLocalStateSeed(log: (m: string) => void = console.wa
   } finally {
     if (child?.pid) {
       try {
-        execFileSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', timeout: 5000, windowsHide: true });
+        execFileSync('taskkill', ['/T', '/F', '/PID', String(child.pid)], {
+          stdio: 'ignore',
+          timeout: 5000,
+          windowsHide: true,
+        });
       } catch {
         // handed off already; the profile scan below gets the rest
       }
@@ -133,7 +173,11 @@ export async function ensureLocalStateSeed(log: (m: string) => void = console.wa
     rmSync(lock, { force: true });
   }
   const ok = !!readTrustedSeed();
-  log(ok ? `[seeded-chrome] Local State seed made: ${seed}` : '[seeded-chrome] no Local State seed: Chrome did not fetch its variations in time');
+  log(
+    ok
+      ? `[seeded-chrome] Local State seed made: ${seed}`
+      : '[seeded-chrome] no Local State seed: Chrome did not fetch its variations in time',
+  );
   return ok;
 }
 
@@ -160,7 +204,11 @@ function endChromesUnder(root: string): number {
   for (const pid of pids) {
     try {
       if (process.platform === 'win32') {
-        execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'ignore', timeout: 5000, windowsHide: true });
+        execFileSync('taskkill', ['/T', '/F', '/PID', String(pid)], {
+          stdio: 'ignore',
+          timeout: 5000,
+          windowsHide: true,
+        });
       } else {
         process.kill(pid, 'SIGKILL');
       }
@@ -186,18 +234,22 @@ async function removeRunRoot(root: string): Promise<void> {
 }
 
 /** Vitest `globalSetup`: seed once, hand workers the run folder, clean it at the end. */
-export default async function setup({ provide }: { provide: (key: 'bglsTestTmp', value: string) => void }): Promise<() => Promise<void>> {
+export default async function setup({
+  provide,
+}: { provide: (key: 'bglsTestTmp', value: string) => void }): Promise<() => Promise<void>> {
   if (process.platform === 'win32' && !(await ensureLocalStateSeed())) {
     console.error(
-      `[seeded-chrome] this Windows machine has no trusted Local State seed (${localStateSeedPath()}). ` +
-        'Every test that starts Chrome will fail with UnseededProfileError rather than cost a failed logon.',
+      `[seeded-chrome] this Windows machine has no trusted Local State seed (${localStateSeedPath()}). Every test that starts Chrome will fail with UnseededProfileError rather than cost a failed logon.`,
     );
   }
   const root = makeRunRoot();
   provide('bglsTestTmp', root);
   return async () => {
     const ended = endChromesUnder(root);
-    if (ended > 0) console.warn(`[seeded-chrome] ended ${ended} Chrome process(es) a test left running under ${root}`);
+    if (ended > 0)
+      console.warn(
+        `[seeded-chrome] ended ${ended} Chrome process(es) a test left running under ${root}`,
+      );
     await removeRunRoot(root);
   };
 }

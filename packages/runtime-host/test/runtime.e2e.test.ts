@@ -37,7 +37,8 @@ afterAll(() => {
   const survivors = assertNoTrackedChromeProcessesRemain();
   // Every profile this file made goes with it, even when the shared run
   // folder (test/support/seeded-chrome.ts) is not in use.
-  for (const dir of workDirs.splice(0)) rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  for (const dir of workDirs.splice(0))
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   if (survivors.length > 0) {
     throw new Error(`chrome processes survived test cleanup: ${survivors.join(', ')}`);
   }
@@ -190,7 +191,9 @@ describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', (
       stealthProfiles: [BASIC_STEALTH_PROFILE],
     });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(looseProfileRoot(), { spec: fixtureBrowserSpec({ stealth: 'full' }) });
+    const req = fixtureLaunchRequest(looseProfileRoot(), {
+      spec: fixtureBrowserSpec({ stealth: 'full' }),
+    });
 
     await expect(runtime.launch(req)).rejects.toMatchObject({ code: 'E_STEALTH_LEVEL_DISALLOWED' });
   });
@@ -204,7 +207,9 @@ describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', (
       // feature exists to make loud.
     });
     runtimesToDispose.push(runtime);
-    const req = fixtureLaunchRequest(looseProfileRoot(), { spec: fixtureBrowserSpec({ stealth: 'basic' }) });
+    const req = fixtureLaunchRequest(looseProfileRoot(), {
+      spec: fixtureBrowserSpec({ stealth: 'basic' }),
+    });
 
     await expect(runtime.launch(req)).rejects.toMatchObject({ code: 'E_STEALTH_PROFILE_MISSING' });
   });
@@ -243,7 +248,9 @@ describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', (
     });
     runtimesToDispose.push(runtime);
 
-    const req = fixtureLaunchRequest(looseProfileRoot(), { spec: fixtureBrowserSpec({ stealth: 'off' }) });
+    const req = fixtureLaunchRequest(looseProfileRoot(), {
+      spec: fixtureBrowserSpec({ stealth: 'off' }),
+    });
     const handle = await runtime.launch(req);
 
     expect(handle.stealthProfile ?? null).toBeNull();
@@ -267,7 +274,9 @@ describe('HostRuntime.launch, stealth: silence must not survive, real Chrome', (
     });
     runtimesToDispose.push(runtime);
 
-    const req = fixtureLaunchRequest(looseProfileRoot(), { spec: fixtureBrowserSpec({ stealth: 'basic' }) });
+    const req = fixtureLaunchRequest(looseProfileRoot(), {
+      spec: fixtureBrowserSpec({ stealth: 'basic' }),
+    });
     await expect(runtime.launch(req)).rejects.toMatchObject({ code: 'E_ARG_DENIED' });
   }, 60_000);
 });

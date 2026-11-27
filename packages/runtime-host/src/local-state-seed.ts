@@ -41,7 +41,10 @@ type State = Record<string, unknown>;
 
 /** Where this machine's seed lives: `BGLS_LOCAL_STATE_SEED`, else `~/.browserglass/local-state-seed.json`. */
 export function localStateSeedPath(): string {
-  return process.env['BGLS_LOCAL_STATE_SEED'] ?? join(homedir(), '.browserglass', 'local-state-seed.json');
+  return (
+    process.env['BGLS_LOCAL_STATE_SEED'] ??
+    join(homedir(), '.browserglass', 'local-state-seed.json')
+  );
 }
 
 function readJson(file: string): State | undefined {
@@ -135,13 +138,16 @@ export function seedProfileLocalState(userDataDir: string): SeedOutcome {
  */
 export function runsPasswordCheck(binaryPath: string): boolean {
   const name = basename(binaryPath.replace(/\\/g, '/')).toLowerCase();
-  return name === 'chrome.exe' || name === 'chromium.exe' || name === 'chrome' || name === 'chromium';
+  return (
+    name === 'chrome.exe' || name === 'chromium.exe' || name === 'chrome' || name === 'chromium'
+  );
 }
 
 /** The `--user-data-dir` a Chrome command line names, or `null`. */
 export function userDataDirFromArgs(args: readonly string[]): string | null {
   for (const a of args) {
-    if (a.startsWith('--user-data-dir=')) return a.slice('--user-data-dir='.length).replace(/^"|"$/g, '');
+    if (a.startsWith('--user-data-dir='))
+      return a.slice('--user-data-dir='.length).replace(/^"|"$/g, '');
   }
   return null;
 }
@@ -151,10 +157,12 @@ export class UnseededProfileError extends Error {
   readonly userDataDir: string;
   constructor(userDataDir: string, outcome: SeedOutcome) {
     super(
-      `refusing to start Chrome on an unseeded profile (${userDataDir}, seed: ${outcome}). ` +
-        `On Windows every such start costs one failed logon for the signed in account, and 10 in 10 minutes lock it. ` +
-        `Make this machine's seed once (${localStateSeedPath()}): the test suites do it in test/support/seeded-chrome.ts, ` +
-        `see docs/stealth.md "Failed Windows logons".`,
+      [
+        `refusing to start Chrome on an unseeded profile (${userDataDir}, seed: ${outcome}).`,
+        'On Windows every such start costs one failed logon for the signed in account, and 10 in 10 minutes lock it.',
+        `Make this machine's seed once (${localStateSeedPath()}): the test suites do it in test/support/seeded-chrome.ts,`,
+        'see docs/stealth.md "Failed Windows logons".',
+      ].join(' '),
     );
     this.name = 'UnseededProfileError';
     this.userDataDir = userDataDir;
